@@ -1,38 +1,69 @@
 use std::io;
-use std::path::Path;
-use http::uri::Uri;
+use std::fs;
+use std::path::{PathBuf};
+use url::Url;
 
-use crate::Fs;
-use crate::Error;
-use crate::FsImplementation;
-use crate::Metadata;
-use crate::ReadDir;
+use crate::{ Fs, Error, FsImplementation, Metadata, ReadDir, FileKind };
+
+fn metadata_from_fs(metadata: fs::Metadata) -> Metadata {
+    let mut kind = FileKind::Symlink;
+    if metadata.file_type().is_dir() {
+        kind = FileKind::Directory;
+    } else if metadata.file_type().is_file() {
+        kind = FileKind::File;
+    }
+
+    Metadata {
+        kind,
+        length: metadata.len(),
+    }
+}
 
 pub struct FileFs {
+    root: Url,
 }
 
 impl FileFs {
-  pub fn new(uri: Uri) -> Result<Fs, Error> {
-    Ok(Fs {
-      scheme: Box::new(FileFs {}),
-    })
-  }
+    pub fn connect(url: Url) -> Result<Fs, io::Error> {
+        let fs = FileFs {
+            root: url,
+        };
+
+        Ok(Fs {
+            scheme: Box::new(fs),
+        })
+    }
+
+    fn get_path(&self, url: &Url) -> io::Result<PathBuf> {
+        match url.to_file_path() {
+            Ok(path) => Ok(path),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidInput, Error::new(&format!("Unable to convert '{}' to a file path.", url.to_string())))),
+        }
+    }
 }
 
 impl FsImplementation for FileFs {
-    fn metadata(&self, path: &Path) -> io::Result<Metadata> {
-      Ok(Metadata {})
+    fn get_root(&self) -> &Url {
+        &self.root
     }
 
-    fn read_dir(&self, path: &Path) -> io::Result<ReadDir> {
-      Ok(ReadDir {})
+    fn metadata(&self, url: Url) -> io::Result<Metadata> {
+        Ok(metadata_from_fs(fs::metadata(self.get_path(&url)?)?))
     }
 
-    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
-      Ok(())
+    fn symlink_metadata(&self, url: Url) -> io::Result<Metadata> {
+        Ok(metadata_from_fs(fs::symlink_metadata(self.get_path(&url)?)?))
     }
 
-    fn remove_file(&self, path: &Path) -> io::Result<()> {
-      Ok(())
+    fn read_dir(&self, url: Url) -> io::Result<ReadDir> {
+        Ok(ReadDir {})
+    }
+
+    fn remove_dir_all(&self, url: Url) -> io::Result<()> {
+        fs::remove_dir_all(self.get_path(&url)?)
+    }
+
+    fn remove_file(&self, url: Url) -> io::Result<()> {
+        fs::remove_file(self.get_path(&url)?)
     }
 }
