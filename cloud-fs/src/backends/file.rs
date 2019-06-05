@@ -1,7 +1,7 @@
 use super::Backend;
 
+use crate::types::{FsErrorType, FsPath};
 use crate::*;
-use crate::types::{FsPath, FsErrorType};
 
 /// Accesses files on the local filesystem. Included with the feature "file".
 #[derive(Debug)]

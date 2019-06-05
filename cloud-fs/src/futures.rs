@@ -1,4 +1,3 @@
-
 use tokio::prelude::*;
 
 use crate::types::*;
@@ -87,5 +86,3 @@ pub type FileListStream = FsStream<File>;
 pub type FileFuture = FsFuture<File>;
 pub type OperationCompleteFuture = FsFuture<()>;
 pub type DataStreamFuture = FsFuture<DataStream>;
-pub type ReadFuture = FsFuture<usize>;
-pub type WriteFuture = FsFuture<usize>;

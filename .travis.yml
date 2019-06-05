@@ -12,7 +12,11 @@ matrix:
 
 cache: cargo
 
+install:
+  - rustup component add clippy
+  - rustup component add rustfmt
+
 script:
-  - find . -name *.rs | xargs rustfmt --check
-  - cargo build --verbose --all
-  - cargo test --verbose --all
+  - cargo build --verbose --all && cargo test --verbose --all
+  - cargo clippy --all
+  - cargo fmt --all -- --check

@@ -11,10 +11,6 @@ pub type Data = Bytes;
 #[derive(Clone, Debug)]
 pub enum FsErrorType {
     HostNotSupported,
-    AuthenticationFailure,
-    UnableToConnect,
-    NotFound,
-    WriterClosed,
     Other,
 }
 
@@ -47,9 +43,6 @@ impl fmt::Display for FsError {
 }
 
 impl Error for FsError {}
-
-pub type FsResult<R> = Result<R, FsError>;
-
 
 #[derive(Clone, Debug)]
 pub struct FsPath {}
