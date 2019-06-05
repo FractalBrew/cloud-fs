@@ -27,8 +27,8 @@ use bytes::buf::FromBuf;
 use bytes::{Bytes, IntoBuf};
 use tokio::prelude::*;
 
-use backends::{connect, Backend};
 pub use backends::BackendType;
+use backends::{connect, Backend};
 use futures::*;
 pub use types::{FsError, FsPath, FsSettings};
 
