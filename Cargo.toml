@@ -1,8 +1,5 @@
-[package]
-name = "cloudfs"
-version = "0.1.0"
-authors = ["Dave Townsend <dtownsend@oxymoronical.com>"]
-edition = "2018"
-
-[dependencies]
-url = "1.7.2"
+[workspace]
+members = [
+    "cloud-fs",
+    "cli",
+]
