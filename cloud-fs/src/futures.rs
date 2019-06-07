@@ -8,18 +8,18 @@ pub type FsStreamPoll<R> = Poll<Option<R>, FsError>;
 
 pub struct FsFuture<R>
 where
-    R: Sized + 'static,
+    R: Send + Sync + 'static,
 {
-    base: Box<Future<Item = R, Error = FsError>>,
+    base: Box<Future<Item = R, Error = FsError> + Send + Sync>,
 }
 
 impl<R> FsFuture<R>
 where
-    R: 'static,
+    R: Send + Sync + 'static,
 {
     pub(crate) fn from_future<F>(base: F) -> Self
     where
-        F: Future<Item = R, Error = FsError> + Sized + 'static,
+        F: Future<Item = R, Error = FsError> + Sized + Send + Sync + 'static,
     {
         FsFuture {
             base: Box::new(base),
@@ -37,7 +37,7 @@ where
 
 impl<R> Future for FsFuture<R>
 where
-    R: 'static,
+    R: Send + Sync + 'static,
 {
     type Item = R;
     type Error = FsError;
@@ -49,18 +49,18 @@ where
 
 pub struct FsStream<R>
 where
-    R: 'static,
+    R: Send + Sync + 'static,
 {
-    base: Box<Stream<Item = R, Error = FsError>>,
+    base: Box<Stream<Item = R, Error = FsError> + Send + Sync>,
 }
 
 impl<R> FsStream<R>
 where
-    R: 'static,
+    R: Send + Sync + 'static,
 {
     pub(crate) fn from_stream<S>(base: S) -> FsStream<R>
     where
-        S: Stream<Item = R, Error = FsError> + Sized + 'static,
+        S: Stream<Item = R, Error = FsError> + Sized + Send + Sync + 'static,
     {
         FsStream {
             base: Box::new(base),
@@ -70,7 +70,7 @@ where
 
 impl<R> Stream for FsStream<R>
 where
-    R: 'static,
+    R: Send + Sync + 'static,
 {
     type Item = R;
     type Error = FsError;

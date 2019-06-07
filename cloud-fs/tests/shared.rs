@@ -7,6 +7,7 @@ use std::fs::{File, create_dir_all};
 use std::io::Write;
 
 use tempdir::TempDir;
+use tokio::prelude::*;
 
 use cloud_fs::{Fs, FsSettings, FsResult};
 
@@ -62,7 +63,7 @@ fn write_file(dir: &mut PathBuf, name: &str, content: &[u8]) -> FsResult<()> {
     Ok(())
 }
 
-pub fn begin_test() -> FsResult<TempDir> {
+pub fn prepare_test() -> FsResult<TempDir> {
     let temp = TempDir::new("cloudfs")?;
 
     let mut dir = PathBuf::from(temp.path());
@@ -87,13 +88,20 @@ pub fn begin_test() -> FsResult<TempDir> {
     Ok(temp)
 }
 
+pub fn test_fs(fs: Fs) {
+}
+
 pub fn run_test(settings: FsSettings) -> FsResult<()> {
-    Fs::new(settings);
+    let future = Fs::new(settings)
+        .map(test_fs)
+        .map_err(|e| panic!(e));
+
+    tokio::run(future);
 
     Ok(())
 }
 
-pub fn end_test(temp: TempDir) -> FsResult<()> {
+pub fn cleanup(temp: TempDir) -> FsResult<()> {
     temp.close()?;
 
     Ok(())

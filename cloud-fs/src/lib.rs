@@ -133,7 +133,7 @@ impl Fs {
     pub fn write_from_stream<P, S, I, E>(&self, path: P, stream: S) -> OperationCompleteFuture
     where
         P: AsRef<FsPath>,
-        S: Stream<Item = I, Error = E> + 'static,
+        S: Stream<Item = I, Error = E> + Send + Sync + 'static,
         I: IntoBuf,
         E: Error,
     {

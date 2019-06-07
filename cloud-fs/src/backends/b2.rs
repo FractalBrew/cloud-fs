@@ -1,4 +1,3 @@
-use super::Backend;
 use crate::*;
 
 /// Accesses files in a Backblaze B2 bucket. Included with the feature "b2".
