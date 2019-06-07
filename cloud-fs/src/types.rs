@@ -2,10 +2,12 @@ use std::error::Error;
 use std::fmt;
 use std::net::IpAddr;
 use std::cmp::min;
+use std::io;
+use std::path::Path;
 
 use bytes::Bytes;
 
-use crate::backends::BackendType;
+use crate::backends::Backend;
 
 pub type Data = Bytes;
 
@@ -45,6 +47,12 @@ impl fmt::Display for FsError {
 }
 
 impl Error for FsError {}
+
+impl From<io::Error> for FsError {
+    fn from(e: io::Error) -> FsError {
+        FsError::from_error(e)
+    }
+}
 
 pub type FsResult<R> = Result<R, FsError>;
 
@@ -167,6 +175,14 @@ impl FsPath {
         } else {
             // Separator found. Return the position of the separator character.
             (&part[..pos], start + pos)
+        }
+    }
+
+    pub fn from_std_path(path: &Path) -> FsResult<FsPath> {
+        if let Some(string) = path.to_str() {
+            FsPath::new(string)
+        } else {
+            Err(FsError::new(FsErrorType::ParseError, "Path was not valid utf8."))
         }
     }
 
@@ -296,13 +312,21 @@ struct FsTarget {
 
 #[derive(Clone, Debug)]
 pub struct FsSettings {
-    backend: BackendType,
+    backend: Backend,
     target: Option<FsTarget>,
     path: FsPath,
 }
 
 impl FsSettings {
-    pub fn backend(&self) -> &BackendType {
+    pub fn new(backend: Backend, path: FsPath) -> FsSettings {
+        FsSettings {
+            backend,
+            target: None,
+            path,
+        }
+    }
+
+    pub fn backend(&self) -> &Backend {
         &self.backend
     }
 
@@ -311,8 +335,11 @@ impl FsSettings {
     }
 }
 
-#[derive(Debug)]
-pub struct File {}
+#[derive(Clone, PartialEq, Debug)]
+pub struct FsFile {
+    path: FsPath,
+    size: Option<usize>,
+}
 
 #[cfg(test)]
 #[allow(clippy::cognitive_complexity)]

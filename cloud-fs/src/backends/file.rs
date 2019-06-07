@@ -1,4 +1,4 @@
-use super::Backend;
+use super::BackendImplementation;
 
 use crate::types::{FsErrorType, FsPath};
 use crate::*;
@@ -18,7 +18,7 @@ impl FileBackend {
             ))
         } else {
             ConnectFuture::from_item(Fs {
-                backend: Backend::File(FileBackend {
+                backend: BackendImplementation::File(FileBackend {
                     settings: settings.to_owned(),
                 }),
             })

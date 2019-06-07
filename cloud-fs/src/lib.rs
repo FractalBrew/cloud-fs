@@ -27,10 +27,10 @@ use bytes::buf::FromBuf;
 use bytes::{Bytes, IntoBuf};
 use tokio::prelude::*;
 
-pub use backends::BackendType;
-use backends::{connect, Backend};
+pub use backends::{BackendImplementation, Backend};
+use backends::connect;
 use futures::*;
-pub use types::{FsError, FsPath, FsSettings};
+pub use types::{FsError, FsPath, FsSettings, FsResult};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
@@ -62,7 +62,7 @@ trait FsImpl {
 
 #[derive(Debug)]
 pub struct Fs {
-    backend: Backend,
+    backend: BackendImplementation,
 }
 
 impl Fs {
@@ -76,7 +76,7 @@ impl Fs {
     /// This is generally only useful for accessing back-end specific
     /// functionality. If you want to develop a truly back-end agnostic app then
     /// you should avoid calling this.
-    pub fn backend(&self) -> &Backend {
+    pub fn backend(&self) -> &BackendImplementation {
         &self.backend
     }
 

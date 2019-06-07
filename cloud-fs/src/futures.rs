@@ -82,7 +82,7 @@ where
 
 pub type DataStream = FsStream<Data>;
 pub type ConnectFuture = FsFuture<Fs>;
-pub type FileListStream = FsStream<File>;
-pub type FileFuture = FsFuture<File>;
+pub type FileListStream = FsStream<FsFile>;
+pub type FileFuture = FsFuture<FsFile>;
 pub type OperationCompleteFuture = FsFuture<()>;
 pub type DataStreamFuture = FsFuture<DataStream>;
