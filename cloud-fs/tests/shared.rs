@@ -9,9 +9,8 @@ use std::io::Write;
 use tempdir::TempDir;
 use tokio::prelude::*;
 
-use cloud_fs::{Fs, FsSettings, FsResult};
+use cloud_fs::*;
 
-const KB: usize = 1024;
 const MB: usize = 1024 * 1024;
 const GB: usize = 1024 * 1024 * 1020;
 
@@ -73,6 +72,7 @@ pub fn prepare_test() -> FsResult<TempDir> {
 
     write_file(&mut dir, "smallfile.txt", b"This is quite a short file.")?;
     write_file(&mut dir, "largefile", &build_content(0, GB))?;
+    write_file(&mut dir, "mediumfile", &build_content(58, 5 * MB))?;
 
     dir.push("dir2");
     create_dir_all(dir.clone())?;
@@ -88,12 +88,82 @@ pub fn prepare_test() -> FsResult<TempDir> {
     Ok(temp)
 }
 
-pub fn test_fs(fs: Fs) {
+fn test_list_files(fs: &Fs) -> impl Future<Item = (), Error = ()> {
+    fn expect(fs: &Fs, path: &FsPath, files: Vec<FsFile>) -> impl Future<Item = (), Error = ()> {
+        fs.list_files(path)
+            .collect()
+            .map(move |results| {
+                let mut sorted = results.clone();
+                sorted.sort();
+                assert_eq!(sorted, files);
+            })
+            .map_err(|e| panic!(e))
+    }
+
+    let all = vec![
+        FsFile::new(FsPath::new("/largefile.txt").unwrap(), Some(GB)),
+        FsFile::new(FsPath::new("/mediumfile.txt").unwrap(), Some(5 * MB)),
+        FsFile::new(FsPath::new("/smallfile.txt").unwrap(), Some(7)),
+        FsFile::new(FsPath::new("/dir2/0foo").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/1bar").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/5diz").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/bar").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/daz").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/foo").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/hop").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/yu").unwrap(), Some(0)),
+    ];
+
+    let sub = vec![
+        FsFile::new(FsPath::new("/dir2/0foo").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/1bar").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/5diz").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/bar").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/daz").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/foo").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/hop").unwrap(), Some(0)),
+        FsFile::new(FsPath::new("/dir2/yu").unwrap(), Some(0)),
+    ];
+
+    expect(fs, &FsPath::new("/").unwrap(), all)
+        .join(expect(fs, &FsPath::new("/dir2").unwrap(), sub))
+        .map(|_| ())
+}
+
+fn test_get_file(fs: &Fs) -> impl Future<Item = (), Error = ()> {
+    future::finished::<(), ()>(())
+}
+
+fn test_delete_file(fs: &Fs) -> impl Future<Item = (), Error = ()> {
+    future::finished::<(), ()>(())
+}
+
+fn test_get_file_stream(fs: &Fs) -> impl Future<Item = (), Error = ()> {
+    future::finished::<(), ()>(())
+}
+
+fn test_write_from_stream(fs: &Fs) -> impl Future<Item = (), Error = ()> {
+    future::finished::<(), ()>(())
+}
+
+fn run_read_tests(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+    test_list_files(&fs).map_err(|e| panic!(e))
+        .join(test_get_file(&fs).map_err(|e| panic!(e)))
+        .join(test_get_file_stream(&fs).map_err(|e| panic!(e)))
+        .map(|_| fs)
+}
+
+fn run_write_tests(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+    test_delete_file(&fs).map_err(|e| panic!(e))
+        .join(test_write_from_stream(&fs).map_err(|e| panic!(e)))
+        .map(|_| fs)
 }
 
 pub fn run_test(settings: FsSettings) -> FsResult<()> {
     let future = Fs::new(settings)
-        .map(test_fs)
+        .and_then(run_read_tests)
+        .and_then(run_write_tests)
+        .map(|_| ())
         .map_err(|e| panic!(e));
 
     tokio::run(future);

@@ -4,6 +4,7 @@ use std::net::IpAddr;
 use std::cmp::min;
 use std::io;
 use std::path::Path;
+use std::cmp::{Ord, Ordering};
 
 use bytes::Bytes;
 
@@ -138,10 +139,55 @@ impl Prefix {
 impl fmt::Display for Prefix {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            // Good comparisons for all the UNC cases.
             Prefix::VerbatimUNC(ref server, ref share) => f.write_fmt(format_args!("\\\\?\\UNC\\{}\\{}", server, share)),
             Prefix::VerbatimDisk(c) => f.write_fmt(format_args!("\\\\?\\{}:", char::from(*c))),
             Prefix::UNC(ref server, ref share) => f.write_fmt(format_args!("\\\\{}\\{}", server, share)),
             Prefix::Disk(c) => f.write_fmt(format_args!("{}:", char::from(*c))),
+        }
+    }
+}
+
+impl Eq for Prefix { }
+
+impl PartialOrd for Prefix {
+    fn partial_cmp(&self, other: &Prefix) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn unc_compare(server_a: &str, share_a: &str, server_b: &str, share_b: &str) -> Ordering {
+    let ord = server_a.cmp(server_b);
+    if ord != Ordering::Equal {
+        return ord;
+    }
+    share_a.cmp(share_b)
+}
+
+impl Ord for Prefix {
+    fn cmp(&self, other: &Prefix) -> Ordering {
+        if self == other {
+            return Ordering::Equal;
+        }
+
+        match (self, other) {
+            // Good comparisons for the disk cases.
+            (Prefix::VerbatimDisk(a), Prefix::VerbatimDisk(b)) => a.cmp(b),
+            (Prefix::Disk(a), Prefix::Disk(b)) => a.cmp(b),
+            (Prefix::VerbatimDisk(a), Prefix::Disk(b)) => a.cmp(b),
+
+            // Good comparisons for the UNC cases.
+            (Prefix::VerbatimUNC(server_a, share_a), Prefix::VerbatimUNC(server_b, share_b)) => unc_compare(server_a, share_a, server_b, share_b),
+            (Prefix::UNC(server_a, share_a), Prefix::UNC(server_b, share_b)) => unc_compare(server_a, share_a, server_b, share_b),
+            (Prefix::VerbatimUNC(server_a, share_a), Prefix::UNC(server_b, share_b)) => unc_compare(server_a, share_a, server_b, share_b),
+
+            // Now the questionable cases.
+            (Prefix::Disk(_), Prefix::VerbatimUNC(_, _)) => Ordering::Less,
+            (Prefix::Disk(_), Prefix::UNC(_, _)) => Ordering::Less,
+            (Prefix::VerbatimDisk(_), Prefix::VerbatimUNC(_, _)) => Ordering::Less,
+            (Prefix::VerbatimDisk(_), Prefix::UNC(_, _)) => Ordering::Less,
+
+            _ => other.cmp(self),
         }
     }
 }
@@ -154,6 +200,42 @@ enum Component {
     ParentDir,
     DirMarker,
     PathPart(String),
+}
+
+impl Eq for Component { }
+
+impl PartialOrd for Component {
+    fn partial_cmp(&self, other: &Component) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Component {
+    fn cmp(&self, other: &Component) -> Ordering {
+        if self == other {
+            return Ordering::Equal;
+        }
+
+        match (self, other) {
+            // The order of these case doesn't make much sense, but here we go!
+            (Component::Prefix(a), Component::Prefix(b)) => a.cmp(b),
+            (Component::Prefix(_), _) => Ordering::Greater,
+            (Component::RootDir, _) => Ordering::Less,
+
+            // A DirMarker should be the end of the path, so anything else
+            // implies that the path is longer.
+            (Component::DirMarker, _) => Ordering::Less,
+
+            // Easy peasy!
+            (Component::PathPart(a), Component::PathPart(b)) => a.cmp(b),
+
+            // Uhhhhh
+            (Component::ParentDir, _) => Ordering::Less,
+            (Component::CurrentDir, _) => Ordering::Less,
+
+            (a, b) => b.cmp(a).reverse(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -298,6 +380,46 @@ impl fmt::Display for FsPath {
     }
 }
 
+impl Eq for FsPath { }
+
+impl PartialOrd for FsPath {
+    fn partial_cmp(&self, other: &FsPath) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FsPath {
+    fn cmp(&self, other: &FsPath) -> Ordering {
+        if self.is_absolute() != other.is_absolute() {
+            // Weird case.
+            if self.is_absolute() {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        } else {
+            for i in 0..min(self.components.len(), other.components.len()) {
+                let ord = self.components[i].cmp(&other.components[i]);
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+
+            if self.components.len() < other.components.len() {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        }
+    }
+}
+
+impl AsRef<FsPath> for FsPath {
+    fn as_ref(&self) -> &FsPath {
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum FsHost {
     HostName(String),
@@ -339,6 +461,26 @@ impl FsSettings {
 pub struct FsFile {
     path: FsPath,
     size: Option<usize>,
+}
+
+impl FsFile {
+    pub fn new(path: FsPath, size: Option<usize>) -> FsFile {
+        FsFile { path, size, }
+    }
+}
+
+impl Eq for FsFile { }
+
+impl PartialOrd for FsFile {
+    fn partial_cmp(&self, other: &FsFile) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FsFile {
+    fn cmp(&self, other: &FsFile) -> Ordering {
+        self.path.cmp(&other.path)
+    }
 }
 
 #[cfg(test)]
