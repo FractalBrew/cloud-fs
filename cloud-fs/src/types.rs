@@ -314,8 +314,10 @@ impl FsPath {
 
         while pos < self.components.len() {
             let part = self.components[pos].as_str();
-            if part == PARENT_DIR || part == CURRENT_DIR ||
-                (part.is_empty() && pos < self.components.len() - 1) {
+            if part == PARENT_DIR
+                || part == CURRENT_DIR
+                || (part.is_empty() && pos < self.components.len() - 1)
+            {
                 panic!("Unexpected path part '{}' in FsPath.", part);
             }
             pos += 1;
