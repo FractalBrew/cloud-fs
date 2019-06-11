@@ -11,8 +11,8 @@ use tokio::prelude::*;
 
 use cloud_fs::*;
 
-const MB: usize = 1024 * 1024;
-const GB: usize = 1024 * 1024 * 1020;
+const MB: u64 = 1024 * 1024;
+const GB: u64 = 1024 * 1024 * 1020;
 
 struct ContentIterator {
     value: u8,
@@ -37,8 +37,8 @@ impl Iterator for ContentIterator {
     }
 }
 
-fn build_content(seed: u8, length: usize) -> Vec<u8> {
-    let mut buffer: Vec<u8> = Vec::with_capacity(length);
+fn build_content(seed: u8, length: u64) -> Vec<u8> {
+    let mut buffer: Vec<u8> = Vec::with_capacity(length as usize);
 
     let mut iter = ContentIterator::new(seed);
     for i in 0..buffer.len() {
@@ -88,41 +88,61 @@ pub fn prepare_test() -> FsResult<TempDir> {
     Ok(temp)
 }
 
+struct FileChecker {
+    path: FsPath,
+    size: Option<u64>,
+}
+
+impl FileChecker {
+    fn check(&self, file: &FsFile) {
+        assert_eq!(file.path(), &self.path, "Should have the expected name.");
+        assert_eq!(file.size(), self.size, "Should have the expected size for {}", &self.path.to_string());
+    }
+
+    fn check_files(found: Vec<FsFile>, expected: Vec<FileChecker>) {
+        for (file, checker) in found.iter().zip(expected.iter()) {
+            checker.check(file);
+        }
+
+        assert_eq!(found.len(), expected.len(), "Should have seen the right number of results.");
+    }
+}
+
 fn test_list_files(fs: &Fs) -> impl Future<Item = (), Error = ()> {
-    fn expect(fs: &Fs, path: &FsPath, files: Vec<FsFile>) -> impl Future<Item = (), Error = ()> {
+    fn expect(fs: &Fs, path: &FsPath, files: Vec<FileChecker>) -> impl Future<Item = (), Error = ()> {
         fs.list_files(path)
-            .collect()
+            .and_then(|s| s.collect())
             .map(move |results| {
                 let mut sorted = results.clone();
                 sorted.sort();
-                assert_eq!(sorted, files);
+                FileChecker::check_files(sorted, files);
             })
             .map_err(|e| panic!(e))
     }
 
     let all = vec![
-        FsFile::new(FsPath::new("/largefile.txt").unwrap(), Some(GB)),
-        FsFile::new(FsPath::new("/mediumfile.txt").unwrap(), Some(5 * MB)),
-        FsFile::new(FsPath::new("/smallfile.txt").unwrap(), Some(7)),
-        FsFile::new(FsPath::new("/dir2/0foo").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/1bar").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/5diz").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/bar").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/daz").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/foo").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/hop").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/yu").unwrap(), Some(0)),
+        FileChecker { path: FsPath::new("/dir2/0foo").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/1bar").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/5diz").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/bar").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/daz").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/foo").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/hop").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/yu").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/largefile.txt").unwrap(), size: Some(GB) },
+        FileChecker { path: FsPath::new("/mediumfile.txt").unwrap(), size: Some(5 * MB) },
+        FileChecker { path: FsPath::new("/smallfile.txt").unwrap(), size: Some(7) },
     ];
 
     let sub = vec![
-        FsFile::new(FsPath::new("/dir2/0foo").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/1bar").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/5diz").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/bar").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/daz").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/foo").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/hop").unwrap(), Some(0)),
-        FsFile::new(FsPath::new("/dir2/yu").unwrap(), Some(0)),
+        FileChecker { path: FsPath::new("/dir2/0foo").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/1bar").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/5diz").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/bar").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/daz").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/foo").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/hop").unwrap(), size: Some(0) },
+        FileChecker { path: FsPath::new("/dir2/yu").unwrap(), size: Some(0) },
     ];
 
     expect(fs, &FsPath::new("/").unwrap(), all)
@@ -159,16 +179,10 @@ fn run_write_tests(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
         .map(|_| fs)
 }
 
-pub fn run_test(settings: FsSettings) -> FsResult<()> {
-    let future = Fs::new(settings)
-        .and_then(run_read_tests)
+pub fn run_test(fs: Fs) -> impl Future<Item = (), Error = FsError> {
+    run_read_tests(fs)
         .and_then(run_write_tests)
         .map(|_| ())
-        .map_err(|e| panic!(e));
-
-    tokio::run(future);
-
-    Ok(())
 }
 
 pub fn cleanup(temp: TempDir) -> FsResult<()> {

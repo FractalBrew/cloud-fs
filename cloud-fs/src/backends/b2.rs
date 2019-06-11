@@ -13,7 +13,7 @@ impl B2Backend {
 }
 
 impl FsImpl for B2Backend {
-    fn list_files(&self, path: &FsPath) -> FileListStream {
+    fn list_files(&self, path: &FsPath) -> FileListFuture {
         unimplemented!();
     }
 

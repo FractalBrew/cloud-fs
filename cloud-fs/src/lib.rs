@@ -20,6 +20,7 @@ extern crate tokio;
 pub mod backends;
 mod futures;
 mod types;
+pub mod utils;
 
 use std::error::Error;
 
@@ -30,14 +31,14 @@ use tokio::prelude::*;
 pub use backends::{BackendImplementation, Backend};
 use backends::connect;
 use futures::*;
-pub use types::{FsError, FsPath, FsSettings, FsResult, FsFile};
+pub use types::{FsError, FsErrorType, FsPath, FsSettings, FsResult, FsFile};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
     /// Lists the files that start with the given path.
     ///
     /// See [Fs.list_files](struct.Fs.html#method.list_files).
-    fn list_files(&self, path: &FsPath) -> FileListStream;
+    fn list_files(&self, path: &FsPath) -> FileListFuture;
 
     /// Gets info about the file at the given path.
     ///
@@ -66,6 +67,20 @@ pub struct Fs {
 }
 
 impl Fs {
+    fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
+        if !path.is_absolute() {
+            Err(FsError::new(FsErrorType::InvalidPath, "Requests must use an absolute path."))
+        } else if should_be_dir && !path.is_directory() {
+            Err(FsError::new(FsErrorType::InvalidPath, "This request requires the path to a directory."))
+        } else if !should_be_dir && path.is_directory() {
+            Err(FsError::new(FsErrorType::InvalidPath, "This request requires the path to a file."))
+        } else if path.is_windows() {
+            Err(FsError::new(FsErrorType::InvalidPath, "Paths should not include windows prefixes."))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Create a new `Fs` based on the settings passed.
     pub fn new(settings: FsSettings) -> ConnectFuture {
         connect(settings)
@@ -85,10 +100,14 @@ impl Fs {
     /// Because the majority of cloud storage systems do not really have a
     /// notion of directories and files, just file identifiers, this function
     /// will return any files that have an identifier prefixed by `path`.
-    pub fn list_files<P>(&self, path: P) -> FileListStream
+    pub fn list_files<P>(&self, path: P) -> FileListFuture
     where
         P: AsRef<FsPath>,
     {
+        if let Err(e) = self.check_path(path.as_ref(), true) {
+            return FileListFuture::from_error(e);
+        }
+
         self.backend.get().list_files(path.as_ref())
     }
 
@@ -99,6 +118,10 @@ impl Fs {
     where
         P: AsRef<FsPath>,
     {
+        if let Err(e) = self.check_path(path.as_ref(), false) {
+            return FileFuture::from_error(e);
+        }
+
         self.backend.get().get_file(path.as_ref())
     }
 
@@ -110,6 +133,10 @@ impl Fs {
     where
         P: AsRef<FsPath>,
     {
+        if let Err(e) = self.check_path(path.as_ref(), false) {
+            return OperationCompleteFuture::from_error(e);
+        }
+
         self.backend.get().delete_file(path.as_ref())
     }
 
@@ -122,6 +149,10 @@ impl Fs {
     where
         P: AsRef<FsPath>,
     {
+        if let Err(e) = self.check_path(path.as_ref(), false) {
+            return DataStreamFuture::from_error(e);
+        }
+
         self.backend.get().get_file_stream(path.as_ref())
     }
 
@@ -137,6 +168,10 @@ impl Fs {
         I: IntoBuf,
         E: Error,
     {
+        if let Err(e) = self.check_path(path.as_ref(), false) {
+            return OperationCompleteFuture::from_error(e);
+        }
+
         #[allow(clippy::redundant_closure)]
         let mapped = stream
             .map(|i| Bytes::from_buf(i))

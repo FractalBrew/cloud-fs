@@ -12,6 +12,7 @@ b2 = []
 [dependencies]
 tokio = "0.1.21"
 bytes = "0.4.12"
+tokio-fs = "0.1.6"
 
 [dev-dependencies]
 tempdir = "0.3.7"

@@ -58,13 +58,17 @@ impl<R> FsStream<R>
 where
     R: Send + Sync + 'static,
 {
-    pub(crate) fn from_stream<S>(base: S) -> FsStream<R>
+    pub(crate) fn from_stream<S>(base: S) -> Self
     where
         S: Stream<Item = R, Error = FsError> + Sized + Send + Sync + 'static,
     {
         FsStream {
             base: Box::new(base),
         }
+    }
+
+    pub(crate) fn from_error(error: FsError) -> Self {
+        Self::from_stream(stream::once(Err(error)))
     }
 }
 
@@ -83,6 +87,7 @@ where
 pub type DataStream = FsStream<Data>;
 pub type ConnectFuture = FsFuture<Fs>;
 pub type FileListStream = FsStream<FsFile>;
+pub type FileListFuture = FsFuture<FileListStream>;
 pub type FileFuture = FsFuture<FsFile>;
 pub type OperationCompleteFuture = FsFuture<()>;
 pub type DataStreamFuture = FsFuture<DataStream>;
