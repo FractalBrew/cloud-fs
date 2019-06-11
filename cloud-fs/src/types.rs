@@ -272,6 +272,8 @@ impl FsPath {
             pos = next + 1;
         }
 
+        result.normalize()?;
+
         Ok(result)
     }
 
@@ -296,19 +298,63 @@ impl FsPath {
         self.prefix.is_some()
     }
 
-    pub fn normalize(&mut self) -> FsResult<()> {
+    fn assert_is_normalized(&self) {
+        if self.components.is_empty() {
+            return;
+        }
+
         let mut pos = 0;
+        if self.components[pos].is_empty() {
+            pos += 1;
+        } else {
+            while pos < self.components.len() && self.components[pos].as_str() == PARENT_DIR {
+                pos += 1;
+            }
+        }
+
+        while pos < self.components.len() {
+            let part = self.components[pos].as_str();
+            if part == PARENT_DIR || part == CURRENT_DIR ||
+                (part.is_empty() && pos < self.components.len() - 1) {
+                panic!("Unexpected path part '{}' in FsPath.", part);
+            }
+            pos += 1;
+        }
+    }
+
+    fn normalize(&mut self) -> FsResult<()> {
+        if self.components.is_empty() {
+            return Ok(());
+        }
+
+        let mut pos = 0;
+        let is_absolute = if self.components[pos].is_empty() {
+            pos += 1;
+            true
+        } else {
+            false
+        };
+
         while pos < self.components.len() {
             match self.components[pos].as_str() {
                 "" => {
-                    if pos == 0 || pos == self.components.len() - 1 {
-                        pos += 1;
+                    if pos == self.components.len() - 1 {
+                        if pos == 0 {
+                            self.components.remove(pos);
+                        } else {
+                            let previous = self.components[pos - 1].as_str();
+                            if previous == CURRENT_DIR || previous == PARENT_DIR {
+                                self.components.remove(pos);
+                            } else {
+                                pos += 1;
+                            }
+                        }
                     } else {
                         self.components.remove(pos);
                     }
                 }
                 CURRENT_DIR => {
-                    if pos == self.components.len() - 1 {
+                    if pos == self.components.len() - 1 && pos != 0 {
                         self.components[pos] = String::new();
                         pos += 1;
                     } else {
@@ -338,46 +384,49 @@ impl FsPath {
             }
         }
 
+        if self.components.len() == 1 && self.components[0].is_empty() {
+            self.components.push(String::new());
+        }
+
+        self.assert_is_normalized();
+
         Ok(())
     }
 
-    pub fn relative(&self, path: &FsPath) -> FsResult<FsPath> {
-        if !self.is_absolute() || !path.is_absolute() {
+    pub fn relative(&self, target: &FsPath) -> FsResult<FsPath> {
+        self.assert_is_normalized();
+        target.assert_is_normalized();
+
+        if !self.is_absolute() || !target.is_absolute() {
             Err(FsError::new(
                 FsErrorType::ParseError,
                 "Both paths must be absolute to create a relative path.",
             ))
-        } else if self.prefix != path.prefix {
+        } else if self.prefix != target.prefix {
             Err(FsError::new(
                 FsErrorType::ParseError,
                 "Both paths must use the same prefix to create a relative path.",
             ))
         } else {
-            let mut base = self.clone();
-            base.normalize()?;
-            let mut target = path.clone();
-            target.normalize()?;
-
-            println!("{} -> {}", base, target);
             let mut result: FsPath = Default::default();
 
-            let count = min(base.components.len(), target.components.len());
+            let count = min(self.components.len(), target.components.len());
             let mut i = 0;
-            while i < count && base.components[i] == target.components[i] {
+            while i < count && self.components[i] == target.components[i] {
                 i += 1;
             }
 
             let (move_up, mut add_from) =
-                if i == count && base.components.len() == target.components.len() {
+                if i == count && self.components.len() == target.components.len() {
                     // Both paths are the same, but if the path is not a directory
                     // we must use the last part as the relative path.
-                    if base.is_directory() {
+                    if self.is_directory() {
                         (0, target.components.len())
                     } else {
                         (0, i - 1)
                     }
-                } else if i == base.components.len() {
-                    // base cannot be a directory in this case so we must reuse the
+                } else if i == self.components.len() {
+                    // self cannot be a directory in this case so we must reuse the
                     // last part unless this is the root.
                     if i == 1 {
                         (0, i)
@@ -386,21 +435,19 @@ impl FsPath {
                     }
                 } else if i == target.components.len() {
                     // target cannot be a directory in this case so we must walk up
-                    // the remaining parts of base and reuse the last part.
-                    (base.components.len() - i, i - 1)
-                } else if base.components[i].is_empty() {
-                    // target must be a sub-path of base here, we just need to add
+                    // the remaining parts of self and reuse the last part.
+                    (self.components.len() - i, i - 1)
+                } else if self.components[i].is_empty() {
+                    // target must be a sub-path of self here, we just need to add
                     // the rest of it.
                     (0, i)
                 } else if target.components[i].is_empty() {
-                    // base is a sub-path of target, we just need to move up enough.
-                    (base.components.len() - i - 1, target.components.len())
+                    // self is a sub-path of target, we just need to move up enough.
+                    (self.components.len() - i - 1, target.components.len())
                 } else {
                     // The more generic case. Shared prefix. Something extra in both.
-                    (base.components.len() - i - 1, i)
+                    (self.components.len() - i - 1, i)
                 };
-
-            println!("{} matched, move up {}, add from {}", i, move_up, add_from);
 
             for _ in 0..move_up {
                 result.components.push(String::from(PARENT_DIR));
@@ -411,6 +458,7 @@ impl FsPath {
                 add_from += 1;
             }
 
+            result.assert_is_normalized();
             Ok(result)
         }
     }
@@ -424,6 +472,9 @@ impl FsPath {
         } else if path.is_absolute() {
             Ok(path.clone())
         } else {
+            self.assert_is_normalized();
+            path.assert_is_normalized();
+
             let mut result = self.clone();
             result.components.pop();
 
@@ -434,6 +485,8 @@ impl FsPath {
                     result.components.push(component.clone());
                 }
             }
+
+            result.normalize()?;
 
             Ok(result)
         }
@@ -731,8 +784,7 @@ mod tests {
 
     #[test]
     fn test_path_normalize() -> FsResult<()> {
-        let mut path = FsPath::new("/foo/../bar")?;
-        path.normalize()?;
+        let path = FsPath::new("/foo/../bar")?;
         assert_eq!(
             path,
             FsPath {
@@ -745,8 +797,7 @@ mod tests {
         assert!(!path.is_directory());
         assert!(!path.is_windows());
 
-        let mut path = FsPath::new("/foo/../bar/")?;
-        path.normalize()?;
+        let path = FsPath::new("/foo/../bar/")?;
         assert_eq!(
             path,
             FsPath {
@@ -759,8 +810,7 @@ mod tests {
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
-        let mut path = FsPath::new("/foo/baz//diz/.././bar/")?;
-        path.normalize()?;
+        let path = FsPath::new("/foo/baz//diz/.././bar/")?;
         assert_eq!(
             path,
             FsPath {
@@ -773,8 +823,7 @@ mod tests {
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
-        let mut path = FsPath::new("../baz/../../diz")?;
-        path.normalize()?;
+        let path = FsPath::new("../baz/../../diz")?;
         assert_eq!(
             path,
             FsPath {
@@ -787,8 +836,7 @@ mod tests {
         assert!(!path.is_directory());
         assert!(!path.is_windows());
 
-        let mut path = FsPath::new("../foo/./../bar/")?;
-        path.normalize()?;
+        let path = FsPath::new("../foo/./../bar/")?;
         assert_eq!(
             path,
             FsPath {
@@ -801,8 +849,7 @@ mod tests {
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
-        let mut path = FsPath::new("/foo/bar/..")?;
-        path.normalize()?;
+        let path = FsPath::new("/foo/bar/..")?;
         assert_eq!(
             path,
             FsPath {
@@ -815,8 +862,7 @@ mod tests {
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
-        let mut path = FsPath::new("/foo/bar/.")?;
-        path.normalize()?;
+        let path = FsPath::new("/foo/bar/.")?;
         assert_eq!(
             path,
             FsPath {
@@ -826,6 +872,58 @@ mod tests {
         );
         assert_eq!(path.to_string(), "/foo/bar/");
         assert!(path.is_absolute());
+        assert!(path.is_directory());
+        assert!(!path.is_windows());
+
+        let path = FsPath::new("./")?;
+        assert_eq!(
+            path,
+            FsPath {
+                prefix: None,
+                components: components(vec![]),
+            }
+        );
+        assert_eq!(path.to_string(), "");
+        assert!(!path.is_absolute());
+        assert!(path.is_directory());
+        assert!(!path.is_windows());
+
+        let path = FsPath::new(".")?;
+        assert_eq!(
+            path,
+            FsPath {
+                prefix: None,
+                components: components(vec![]),
+            }
+        );
+        assert_eq!(path.to_string(), "");
+        assert!(!path.is_absolute());
+        assert!(path.is_directory());
+        assert!(!path.is_windows());
+
+        let path = FsPath::new("../")?;
+        assert_eq!(
+            path,
+            FsPath {
+                prefix: None,
+                components: components(vec![".."]),
+            }
+        );
+        assert_eq!(path.to_string(), "..");
+        assert!(!path.is_absolute());
+        assert!(path.is_directory());
+        assert!(!path.is_windows());
+
+        let path = FsPath::new("..")?;
+        assert_eq!(
+            path,
+            FsPath {
+                prefix: None,
+                components: components(vec![".."]),
+            }
+        );
+        assert_eq!(path.to_string(), "..");
+        assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
@@ -916,10 +1014,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "..", "",]),
+                components: components(vec!["", "",]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/../");
+        assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
         assert!(!joined.is_windows());
@@ -931,10 +1029,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "..",]),
+                components: components(vec!["", "",]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/..");
+        assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
         assert!(!joined.is_windows());
@@ -946,10 +1044,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "bar", "..", "baz",]),
+                components: components(vec!["", "foo", "baz",]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/bar/../baz");
+        assert_eq!(joined.to_string(), "/foo/baz");
         assert!(joined.is_absolute());
         assert!(!joined.is_directory());
         assert!(!joined.is_windows());
@@ -961,10 +1059,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "bar", ".", "",]),
+                components: components(vec!["", "foo", "bar", "",]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/bar/./");
+        assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
         assert!(!joined.is_windows());
@@ -976,10 +1074,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "bar", ".",]),
+                components: components(vec!["", "foo", "bar", "",]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/bar/.");
+        assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
         assert!(!joined.is_windows());
@@ -991,10 +1089,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "bar", ".", "..",]),
+                components: components(vec!["", "foo", ""]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/bar/./..");
+        assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
         assert!(!joined.is_windows());
@@ -1006,10 +1104,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", ".", "",]),
+                components: components(vec!["", "foo", "",]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/./");
+        assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
         assert!(!joined.is_windows());
@@ -1021,10 +1119,10 @@ mod tests {
             joined,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "..",]),
+                components: components(vec!["", "",]),
             }
         );
-        assert_eq!(joined.to_string(), "/foo/..");
+        assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
         assert!(!joined.is_windows());
