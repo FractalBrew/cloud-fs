@@ -28,10 +28,10 @@ use bytes::buf::FromBuf;
 use bytes::{Bytes, IntoBuf};
 use tokio::prelude::*;
 
-pub use backends::{BackendImplementation, Backend};
 use backends::connect;
+pub use backends::{Backend, BackendImplementation};
 use futures::*;
-pub use types::{FsError, FsErrorType, FsPath, FsSettings, FsResult, FsFile};
+pub use types::{FsError, FsErrorType, FsFile, FsPath, FsResult, FsSettings};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
@@ -69,13 +69,25 @@ pub struct Fs {
 impl Fs {
     fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
         if !path.is_absolute() {
-            Err(FsError::new(FsErrorType::InvalidPath, "Requests must use an absolute path."))
+            Err(FsError::new(
+                FsErrorType::InvalidPath,
+                "Requests must use an absolute path.",
+            ))
         } else if should_be_dir && !path.is_directory() {
-            Err(FsError::new(FsErrorType::InvalidPath, "This request requires the path to a directory."))
+            Err(FsError::new(
+                FsErrorType::InvalidPath,
+                "This request requires the path to a directory.",
+            ))
         } else if !should_be_dir && path.is_directory() {
-            Err(FsError::new(FsErrorType::InvalidPath, "This request requires the path to a file."))
+            Err(FsError::new(
+                FsErrorType::InvalidPath,
+                "This request requires the path to a file.",
+            ))
         } else if path.is_windows() {
-            Err(FsError::new(FsErrorType::InvalidPath, "Paths should not include windows prefixes."))
+            Err(FsError::new(
+                FsErrorType::InvalidPath,
+                "Paths should not include windows prefixes.",
+            ))
         } else {
             Ok(())
         }

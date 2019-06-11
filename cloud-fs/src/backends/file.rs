@@ -1,14 +1,14 @@
 extern crate tokio_fs;
 
-use std::path::PathBuf;
 use std::fs::Metadata;
+use std::path::PathBuf;
 
 use tokio::fs::*;
-use tokio_fs::{DirEntry};
+use tokio_fs::DirEntry;
 
 use super::BackendImplementation;
-use crate::types::{FsPath, FsFile};
-use crate::utils::{MergedStreams, stream_from_future};
+use crate::types::{FsFile, FsPath};
+use crate::utils::{stream_from_future, MergedStreams};
 use crate::*;
 
 struct FileLister {
@@ -30,8 +30,8 @@ impl FileLister {
     }
 
     fn add_directory(&mut self, path: PathBuf) {
-        self.stream.push(stream_from_future(read_dir(path))
-            .map_err(FsError::from_error));
+        self.stream
+            .push(stream_from_future(read_dir(path)).map_err(FsError::from_error));
     }
 
     fn add_dir_entry(&mut self, entry: DirEntry) {
@@ -57,12 +57,12 @@ impl FileLister {
                     } else if metadata.is_file() {
                         return Ok(Some(self.into_file(&entry, &metadata)?));
                     }
-                },
+                }
                 Ok(Async::NotReady) => i += 1,
                 Err(error) => {
                     self.entries.remove(i);
                     return Err(FsError::from_error(error));
-                },
+                }
             }
         }
 
@@ -74,7 +74,7 @@ impl FileLister {
             Async::Ready(Some(entry)) => {
                 self.add_dir_entry(entry);
                 Ok(true)
-            },
+            }
             Async::Ready(None) => Ok(false),
             Async::NotReady => Ok(true),
         }
@@ -124,11 +124,10 @@ impl FileBackend {
 impl FsImpl for FileBackend {
     fn list_files(&self, path: &FsPath) -> FileListFuture {
         match self.get_target(path) {
-            Ok(target) => FileListFuture::from_item(
-                FileListStream::from_stream(
-                    FileLister::list(self.settings.path.clone(), target)
-                )
-            ),
+            Ok(target) => FileListFuture::from_item(FileListStream::from_stream(FileLister::list(
+                self.settings.path.clone(),
+                target,
+            ))),
             Err(error) => FileListFuture::from_error(error),
         }
     }

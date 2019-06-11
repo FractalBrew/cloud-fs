@@ -6,7 +6,7 @@ use tokio::prelude::*;
 mod shared;
 use shared::*;
 
-use cloud_fs::{Fs, Backend, FsSettings, FsResult, FsPath};
+use cloud_fs::{Backend, Fs, FsPath, FsResult, FsSettings};
 
 #[test]
 fn test_file_backend() -> FsResult<()> {

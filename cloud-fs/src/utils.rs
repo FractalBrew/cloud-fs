@@ -75,8 +75,8 @@ where
                         let result = stream.poll();
                         self.current = FutureOrStream::Stream(stream);
                         result
-                    },
-                    Async::NotReady => Ok(Async::NotReady)
+                    }
+                    Async::NotReady => Ok(Async::NotReady),
                 },
                 Err(error) => Err(error),
             },
@@ -129,7 +129,9 @@ where
     where
         S: Stream<Item = I, Error = E> + Sized + Send + Sync + 'static,
     {
-        self.streams.push(StreamHolder { stream: Box::new(stream) });
+        self.streams.push(StreamHolder {
+            stream: Box::new(stream),
+        });
     }
 }
 
@@ -150,7 +152,7 @@ where
                 Ok(Async::Ready(None)) => {
                     self.streams.remove(i);
                     continue;
-                },
+                }
                 Ok(Async::NotReady) => {
                     // Move on to the next stream.
                 }
