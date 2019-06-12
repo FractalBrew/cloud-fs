@@ -15,4 +15,4 @@ bytes = "0.4.12"
 tokio-fs = "0.1.6"
 
 [dev-dependencies]
-tempdir = "0.3.7"
+tempfile = "3.0.8"

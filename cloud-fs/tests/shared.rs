@@ -1,12 +1,12 @@
 extern crate cloud_fs;
-extern crate tempdir;
+extern crate tempfile;
 extern crate tokio;
 
 use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::path::PathBuf;
 
-use tempdir::TempDir;
+use tempfile::{tempdir, TempDir};
 use tokio::prelude::*;
 
 use cloud_fs::*;
@@ -62,7 +62,7 @@ fn write_file(dir: &PathBuf, name: &str, content: &[u8]) -> FsResult<()> {
 }
 
 pub fn prepare_test() -> FsResult<TempDir> {
-    let temp = TempDir::new("cloudfs")?;
+    let temp = tempdir()?;
 
     let mut dir = PathBuf::from(temp.path());
     dir.push("test1");
