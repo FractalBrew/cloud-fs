@@ -113,8 +113,8 @@ impl FileBackend {
 
     fn get_target(&self, path: &FsPath) -> FsResult<PathBuf> {
         // We know that the path is absolute and not windows-like here.
-        let mut relative = path.clone();
-        relative.components.remove(0);
+        //let mut relative = path.clone();
+        //relative.components.remove(0);
 
         //let target = self.settings.path.join(&relative)?;
         Ok(PathBuf::from(path.to_string()))

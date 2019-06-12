@@ -213,7 +213,9 @@ impl Ord for Prefix {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FsPath {
     pub(crate) prefix: Option<Prefix>,
-    pub(crate) components: Vec<String>,
+    pub(crate) is_absolute: bool,
+    pub(crate) directories: Vec<String>,
+    pub(crate) filename: Option<String>,
 }
 
 impl FsPath {
@@ -259,16 +261,25 @@ impl FsPath {
             pos = len;
         }
 
-        if pos == path.len() {
-            return Ok(result);
-        }
+        let path = &path[pos..];
+        pos = 0;
 
-        loop {
+        while pos < path.len() {
             let (part, next) = FsPath::find_separator(path, pos, any_separator);
-            result.components.push(part.to_owned());
-            if next == path.len() {
+
+            if next == 0 {
+                result.is_absolute = true;
+            } else if next == path.len() {
+                if part == PARENT_DIR || part == CURRENT_DIR {
+                    result.directories.push(part.to_owned());
+                } else if !part.is_empty() {
+                    result.filename = Some(part.to_owned());
+                }
                 break;
+            } else {
+                result.directories.push(part.to_owned());
             }
+
             pos = next + 1;
         }
 
@@ -278,20 +289,11 @@ impl FsPath {
     }
 
     pub fn is_absolute(&self) -> bool {
-        self.components.first().map(|s| s.as_str()) == Some("")
+        self.is_absolute
     }
 
     pub fn is_directory(&self) -> bool {
-        if let Some(part) = self.components.last() {
-            match part.as_ref() {
-                "" => true,
-                CURRENT_DIR => true,
-                PARENT_DIR => true,
-                _ => false,
-            }
-        } else {
-            true
-        }
+        self.filename.is_none()
     }
 
     pub fn is_windows(&self) -> bool {
@@ -299,199 +301,119 @@ impl FsPath {
     }
 
     fn assert_is_normalized(&self) {
-        if self.components.is_empty() {
+        if self.directories.is_empty() {
             return;
         }
 
         let mut pos = 0;
-        if self.components[pos].is_empty() {
-            pos += 1;
-        } else {
-            while pos < self.components.len() && self.components[pos].as_str() == PARENT_DIR {
+        if !self.is_absolute {
+            while pos < self.directories.len() && self.directories[0].as_str() == PARENT_DIR {
                 pos += 1;
             }
         }
 
-        while pos < self.components.len() {
-            let part = self.components[pos].as_str();
-            if part == PARENT_DIR
-                || part == CURRENT_DIR
-                || (part.is_empty() && pos < self.components.len() - 1)
-            {
-                panic!("Unexpected path part '{}' in FsPath.", part);
+        while pos < self.directories.len() {
+            let part = self.directories[pos].as_str();
+            if part.is_empty() || part == PARENT_DIR || part == CURRENT_DIR {
+                panic!("Normalized path must not contain '{}'.", part);
             }
             pos += 1;
         }
     }
 
     fn normalize(&mut self) -> FsResult<()> {
-        if self.components.is_empty() {
-            return Ok(());
-        }
-
         let mut pos = 0;
-        let is_absolute = if self.components[pos].is_empty() {
-            pos += 1;
-            true
-        } else {
-            false
-        };
-
-        while pos < self.components.len() {
-            match self.components[pos].as_str() {
+        while pos < self.directories.len() {
+            match self.directories[pos].as_str() {
                 "" => {
-                    if pos == self.components.len() - 1 {
-                        if pos == 0 {
-                            self.components.remove(pos);
+                    self.directories.remove(pos);
+                }
+                PARENT_DIR => {
+                    if pos > 0 {
+                        if self.directories[pos - 1].as_str() == PARENT_DIR {
+                            pos += 1;
                         } else {
-                            let previous = self.components[pos - 1].as_str();
-                            if previous == CURRENT_DIR || previous == PARENT_DIR {
-                                self.components.remove(pos);
-                            } else {
-                                pos += 1;
-                            }
+                            self.directories.remove(pos - 1);
+                            self.directories.remove(pos - 1);
+                            pos -= 1;
                         }
                     } else {
-                        self.components.remove(pos);
+                        if self.is_absolute() {
+                            return Err(FsError::new(
+                                FsErrorType::ParseError,
+                                "Cannot have remaining relative path parts in an absolute path.",
+                            ));
+                        }
+                        pos += 1;
                     }
                 }
                 CURRENT_DIR => {
-                    if pos == self.components.len() - 1 && pos != 0 {
-                        self.components[pos] = String::new();
-                        pos += 1;
-                    } else {
-                        self.components.remove(pos);
-                    }
-                }
-                PARENT_DIR => {
-                    if pos == 0 || self.components[pos - 1].as_str() == PARENT_DIR {
-                        pos += 1;
-                    } else if pos == 1 && self.components[0].is_empty() {
-                        return Err(FsError::new(
-                            FsErrorType::ParseError,
-                            "Cannot move above the root",
-                        ));
-                    } else {
-                        self.components.remove(pos - 1);
-
-                        if pos == self.components.len() {
-                            self.components[pos - 1] = String::new();
-                        } else {
-                            self.components.remove(pos - 1);
-                            pos -= 1;
-                        }
-                    }
+                    self.directories.remove(pos);
                 }
                 _ => pos += 1,
             }
         }
 
-        if self.components.len() == 1 && self.components[0].is_empty() {
-            self.components.push(String::new());
-        }
-
         self.assert_is_normalized();
-
         Ok(())
     }
 
     pub fn relative(&self, target: &FsPath) -> FsResult<FsPath> {
+        if !self.is_absolute || !target.is_absolute {
+            return Err(FsError::new(
+                FsErrorType::ParseError,
+                "Can only generate a relative path between two absolute paths.",
+            ));
+        }
+        if self.prefix != target.prefix {
+            return Err(FsError::new(FsErrorType::ParseError, "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+        }
+
         self.assert_is_normalized();
         target.assert_is_normalized();
 
-        if !self.is_absolute() || !target.is_absolute() {
-            Err(FsError::new(
-                FsErrorType::ParseError,
-                "Both paths must be absolute to create a relative path.",
-            ))
-        } else if self.prefix != target.prefix {
-            Err(FsError::new(
-                FsErrorType::ParseError,
-                "Both paths must use the same prefix to create a relative path.",
-            ))
-        } else {
-            let mut result: FsPath = Default::default();
+        let mut relative: FsPath = Default::default();
+        relative.filename = target.filename.clone();
 
-            let count = min(self.components.len(), target.components.len());
-            let mut i = 0;
-            while i < count && self.components[i] == target.components[i] {
-                i += 1;
-            }
-
-            let (move_up, mut add_from) =
-                if i == count && self.components.len() == target.components.len() {
-                    // Both paths are the same, but if the path is not a directory
-                    // we must use the last part as the relative path.
-                    if self.is_directory() {
-                        (0, target.components.len())
-                    } else {
-                        (0, i - 1)
-                    }
-                } else if i == self.components.len() {
-                    // self cannot be a directory in this case so we must reuse the
-                    // last part unless this is the root.
-                    if i == 1 {
-                        (0, i)
-                    } else {
-                        (0, i - 1)
-                    }
-                } else if i == target.components.len() {
-                    // target cannot be a directory in this case so we must walk up
-                    // the remaining parts of self and reuse the last part.
-                    (self.components.len() - i, i - 1)
-                } else if self.components[i].is_empty() {
-                    // target must be a sub-path of self here, we just need to add
-                    // the rest of it.
-                    (0, i)
-                } else if target.components[i].is_empty() {
-                    // self is a sub-path of target, we just need to move up enough.
-                    (self.components.len() - i - 1, target.components.len())
-                } else {
-                    // The more generic case. Shared prefix. Something extra in both.
-                    (self.components.len() - i - 1, i)
-                };
-
-            for _ in 0..move_up {
-                result.components.push(String::from(PARENT_DIR));
-            }
-
-            while add_from < target.components.len() {
-                result.components.push(target.components[add_from].clone());
-                add_from += 1;
-            }
-
-            result.assert_is_normalized();
-            Ok(result)
+        let mut same_count = 0;
+        let min_length = min(self.directories.len(), target.directories.len());
+        while same_count < min_length
+            && self.directories[same_count] == target.directories[same_count]
+        {
+            same_count += 1;
         }
+
+        for _ in same_count..self.directories.len() {
+            relative.directories.push(String::from(PARENT_DIR));
+        }
+
+        for i in same_count..target.directories.len() {
+            relative.directories.push(target.directories[i].clone());
+        }
+
+        relative.assert_is_normalized();
+
+        Ok(relative)
     }
 
     pub fn join(&self, path: &FsPath) -> FsResult<FsPath> {
-        if !self.is_absolute() {
-            Err(FsError::new(
-                FsErrorType::ParseError,
-                "Cannot join to a relative path.",
-            ))
-        } else if path.is_absolute() {
-            Ok(path.clone())
-        } else {
-            self.assert_is_normalized();
-            path.assert_is_normalized();
+        self.assert_is_normalized();
+        path.assert_is_normalized();
 
-            let mut result = self.clone();
-            result.components.pop();
-
-            if path.components.is_empty() {
-                result.components.push(String::new());
-            } else {
-                for component in &path.components {
-                    result.components.push(component.clone());
-                }
-            }
-
-            result.normalize()?;
-
-            Ok(result)
+        if path.is_absolute {
+            return Ok(path.clone());
         }
+
+        let mut joined = self.clone();
+        joined.filename = path.filename.clone();
+
+        for dir in path.directories.iter() {
+            joined.directories.push(dir.clone());
+        }
+
+        joined.normalize()?;
+
+        Ok(joined)
     }
 }
 
@@ -503,7 +425,20 @@ impl fmt::Display for FsPath {
             p.fmt(f)?
         }
 
-        f.write_str(&self.components.join(separator))
+        if self.is_absolute {
+            f.write_str(separator)?;
+        }
+
+        f.write_str(&self.directories.join(separator))?;
+        if !self.directories.is_empty() {
+            f.write_str(separator)?;
+        }
+
+        if let Some(ref filename) = self.filename {
+            f.write_str(filename.as_str())?;
+        }
+
+        Ok(())
     }
 }
 
@@ -517,27 +452,27 @@ impl PartialOrd for FsPath {
 
 impl Ord for FsPath {
     fn cmp(&self, other: &FsPath) -> Ordering {
-        if self.is_absolute() != other.is_absolute() {
-            // Weird case.
-            if self.is_absolute() {
-                Ordering::Greater
-            } else {
-                Ordering::Less
-            }
-        } else {
-            for i in 0..min(self.components.len(), other.components.len()) {
-                let ord = self.components[i].cmp(&other.components[i]);
-                if ord != Ordering::Equal {
-                    return ord;
-                }
-            }
-
-            if self.components.len() < other.components.len() {
-                Ordering::Less
-            } else {
-                Ordering::Greater
-            }
+        // This is a little fuzzy.
+        match self.prefix.cmp(&other.prefix) {
+            Ordering::Equal => (),
+            other => return other,
         }
+
+        // Not really sure here either.
+        if self.is_absolute != other.is_absolute {
+            return if self.is_absolute {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+
+        match self.directories.cmp(&other.directories) {
+            Ordering::Equal => (),
+            other => return other,
+        }
+
+        self.filename.cmp(&other.filename)
     }
 }
 
@@ -598,7 +533,7 @@ impl Ord for FsFile {
 mod tests {
     use super::*;
 
-    fn components(parts: Vec<&str>) -> Vec<String> {
+    fn directories(parts: Vec<&str>) -> Vec<String> {
         parts.iter().cloned().map(|s| s.to_owned()).collect()
     }
 
@@ -609,7 +544,9 @@ mod tests {
             path,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "bar",]),
+                is_absolute: true,
+                directories: directories(vec!["foo"]),
+                filename: Some(String::from("bar")),
             }
         );
         assert_eq!(path.to_string(), "/foo/bar");
@@ -622,7 +559,9 @@ mod tests {
             path,
             FsPath {
                 prefix: None,
-                components: components(vec!["foo", "bar",]),
+                is_absolute: false,
+                directories: directories(vec!["foo"]),
+                filename: Some(String::from("bar")),
             }
         );
         assert_eq!(path.to_string(), "foo/bar");
@@ -635,7 +574,9 @@ mod tests {
             path,
             FsPath {
                 prefix: None,
-                components: components(vec!["foo", "bar", "",]),
+                is_absolute: false,
+                directories: directories(vec!["foo", "bar"]),
+                filename: None,
             }
         );
         assert_eq!(path.to_string(), "foo/bar/");
@@ -648,7 +589,9 @@ mod tests {
             path,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "",]),
+                is_absolute: true,
+                directories: directories(vec![]),
+                filename: None,
             }
         );
         assert_eq!(path.to_string(), "/");
@@ -661,7 +604,9 @@ mod tests {
             path,
             FsPath {
                 prefix: None,
-                components: vec![],
+                is_absolute: false,
+                directories: directories(vec![]),
+                filename: None,
             }
         );
         assert_eq!(path.to_string(), "");
@@ -674,7 +619,9 @@ mod tests {
             path,
             FsPath {
                 prefix: None,
-                components: components(vec!["foo", "bar", "",]),
+                is_absolute: false,
+                directories: directories(vec!["foo", "bar"]),
+                filename: None,
             }
         );
         assert_eq!(path.to_string(), "foo/bar/");
@@ -687,7 +634,9 @@ mod tests {
             path,
             FsPath {
                 prefix: None,
-                components: components(vec!["", "foo", "bar",]),
+                is_absolute: true,
+                directories: directories(vec!["foo"]),
+                filename: Some(String::from("bar")),
             }
         );
         assert_eq!(path.to_string(), "/foo/bar");
@@ -705,7 +654,9 @@ mod tests {
             path,
             FsPath {
                 prefix: Some(Prefix::Disk(b'C')),
-                components: components(vec!["", "foo", "bar",]),
+                is_absolute: true,
+                directories: directories(vec!["foo"]),
+                filename: Some(String::from("bar")),
             }
         );
         assert_eq!(path.to_string(), "C:\\foo\\bar");
@@ -718,7 +669,9 @@ mod tests {
             path,
             FsPath {
                 prefix: Some(Prefix::Disk(b'C')),
-                components: components(vec!["", "foo", "bar",]),
+                is_absolute: true,
+                directories: directories(vec!["foo"]),
+                filename: Some(String::from("bar")),
             }
         );
         assert_eq!(path.to_string(), "C:\\foo\\bar");
@@ -731,7 +684,9 @@ mod tests {
             path,
             FsPath {
                 prefix: Some(Prefix::UNC(String::from("bar"), String::from("foo"))),
-                components: components(vec!["", "test",]),
+                is_absolute: true,
+                directories: directories(vec![]),
+                filename: Some(String::from("test")),
             }
         );
         assert_eq!(path.to_string(), "\\\\bar\\foo\\test");
@@ -744,7 +699,9 @@ mod tests {
             path,
             FsPath {
                 prefix: Some(Prefix::VerbatimDisk(b'C')),
-                components: components(vec!["", "foo", "bar",]),
+                is_absolute: true,
+                directories: directories(vec!["foo"]),
+                filename: Some(String::from("bar")),
             }
         );
         assert_eq!(path.to_string(), "\\\\?\\C:\\foo\\bar");
@@ -757,7 +714,9 @@ mod tests {
             path,
             FsPath {
                 prefix: Some(Prefix::VerbatimDisk(b'C')),
-                components: components(vec!["", "foo/bar",]),
+                is_absolute: true,
+                directories: directories(vec![]),
+                filename: Some(String::from("foo/bar")),
             }
         );
         assert_eq!(path.to_string(), "\\\\?\\C:\\foo/bar");
@@ -773,7 +732,9 @@ mod tests {
                     String::from("bar"),
                     String::from("foo")
                 )),
-                components: components(vec!["", "test",]),
+                is_absolute: true,
+                directories: directories(vec![]),
+                filename: Some(String::from("test")),
             }
         );
         assert_eq!(path.to_string(), "\\\\?\\UNC\\bar\\foo\\test");
@@ -787,144 +748,67 @@ mod tests {
     #[test]
     fn test_path_normalize() -> FsResult<()> {
         let path = FsPath::new("/foo/../bar")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "bar",]),
-            }
-        );
         assert_eq!(path.to_string(), "/bar");
         assert!(path.is_absolute());
         assert!(!path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("/foo/../bar/")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "bar", "",]),
-            }
-        );
         assert_eq!(path.to_string(), "/bar/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("/foo/baz//diz/.././bar/")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "baz", "bar", "",]),
-            }
-        );
         assert_eq!(path.to_string(), "/foo/baz/bar/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("../baz/../../diz")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..", "diz",]),
-            }
-        );
         assert_eq!(path.to_string(), "../../diz");
         assert!(!path.is_absolute());
         assert!(!path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("../foo/./../bar/")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "bar", "",]),
-            }
-        );
         assert_eq!(path.to_string(), "../bar/");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("/foo/bar/..")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "",]),
-            }
-        );
         assert_eq!(path.to_string(), "/foo/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("/foo/bar/.")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "bar", "",]),
-            }
-        );
         assert_eq!(path.to_string(), "/foo/bar/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("./")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec![]),
-            }
-        );
         assert_eq!(path.to_string(), "");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new(".")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec![]),
-            }
-        );
         assert_eq!(path.to_string(), "");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("../")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec![".."]),
-            }
-        );
-        assert_eq!(path.to_string(), "..");
+        assert_eq!(path.to_string(), "../");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
 
         let path = FsPath::new("..")?;
-        assert_eq!(
-            path,
-            FsPath {
-                prefix: None,
-                components: components(vec![".."]),
-            }
-        );
-        assert_eq!(path.to_string(), "..");
+        assert_eq!(path.to_string(), "../");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
@@ -937,13 +821,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let sub = FsPath::new("test/baz")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "test", "baz",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/test/baz");
         assert!(joined.is_absolute());
         assert!(!joined.is_directory());
@@ -952,13 +829,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new("test/baz")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "bar", "test", "baz",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/bar/test/baz");
         assert!(joined.is_absolute());
         assert!(!joined.is_directory());
@@ -967,13 +837,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new("test/baz/")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "bar", "test", "baz", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/bar/test/baz/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -982,13 +845,6 @@ mod tests {
         let base = FsPath::new("C:\\")?;
         let sub = FsPath::new("test/baz/")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: Some(Prefix::Disk(b'C')),
-                components: components(vec!["", "test", "baz", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "C:\\test\\baz\\");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -997,13 +853,6 @@ mod tests {
         let base = FsPath::new("/")?;
         let sub = FsPath::new("test/baz/")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "test", "baz", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/test/baz/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1012,13 +861,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let sub = FsPath::new("../")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1027,13 +869,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let sub = FsPath::new("..")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1042,13 +877,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new("../baz")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "baz",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/baz");
         assert!(joined.is_absolute());
         assert!(!joined.is_directory());
@@ -1057,13 +885,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new("./")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "bar", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1072,13 +893,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new(".")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "bar", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1087,13 +901,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new("./..")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", ""]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1102,13 +909,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let sub = FsPath::new("./")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1117,13 +917,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let sub = FsPath::new("..")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1132,13 +925,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let sub = FsPath::new("")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1147,13 +933,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let sub = FsPath::new("baz")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "baz",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/baz");
         assert!(joined.is_absolute());
         assert!(!joined.is_directory());
@@ -1162,13 +941,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new("")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "bar", "",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
         assert!(joined.is_directory());
@@ -1177,13 +949,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let sub = FsPath::new("baz")?;
         let joined = base.join(&sub)?;
-        assert_eq!(
-            joined,
-            FsPath {
-                prefix: None,
-                components: components(vec!["", "foo", "bar", "baz",]),
-            }
-        );
         assert_eq!(joined.to_string(), "/foo/bar/baz");
         assert!(joined.is_absolute());
         assert!(!joined.is_directory());
@@ -1197,13 +962,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let next = FsPath::new("/foo/baz")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["baz",]),
-            }
-        );
         assert_eq!(relative.to_string(), "baz");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1212,13 +970,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let next = FsPath::new("/foo/baz")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "baz",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../baz");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1227,13 +978,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let next = FsPath::new("/foo/baz/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "baz", "",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../baz/");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
@@ -1242,13 +986,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let next = FsPath::new("/foo/baz/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["baz", "",]),
-            }
-        );
         assert_eq!(relative.to_string(), "baz/");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
@@ -1257,13 +994,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let next = FsPath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["bar",]),
-            }
-        );
         assert_eq!(relative.to_string(), "bar");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1272,13 +1002,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let next = FsPath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec![]),
-            }
-        );
         assert_eq!(relative.to_string(), "");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
@@ -1287,13 +1010,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let next = FsPath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "bar",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../bar");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1302,13 +1018,6 @@ mod tests {
         let base = FsPath::new("/foo/bar")?;
         let next = FsPath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["bar", "",]),
-            }
-        );
         assert_eq!(relative.to_string(), "bar/");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
@@ -1317,14 +1026,7 @@ mod tests {
         let base = FsPath::new("/foo/bar/")?;
         let next = FsPath::new("/foo/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..",]),
-            }
-        );
-        assert_eq!(relative.to_string(), "..");
+        assert_eq!(relative.to_string(), "../");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
         assert!(!relative.is_windows());
@@ -1332,13 +1034,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz")?;
         let next = FsPath::new("/foo/bar/bad/gah")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["bad", "gah",]),
-            }
-        );
         assert_eq!(relative.to_string(), "bad/gah");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1347,13 +1042,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz")?;
         let next = FsPath::new("/foo/bad/gah")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "bad", "gah",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../bad/gah");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1362,13 +1050,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz")?;
         let next = FsPath::new("/foo/bar/baz")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["baz",]),
-            }
-        );
         assert_eq!(relative.to_string(), "baz");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1377,13 +1058,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz")?;
         let next = FsPath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "bar",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../bar");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1392,13 +1066,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz")?;
         let next = FsPath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec![]),
-            }
-        );
         assert_eq!(relative.to_string(), "");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
@@ -1407,13 +1074,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz")?;
         let next = FsPath::new("/foo/bar/baz/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["baz", "",]),
-            }
-        );
         assert_eq!(relative.to_string(), "baz/");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
@@ -1422,13 +1082,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz")?;
         let next = FsPath::new("/foo/bar/baz/gad")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["baz", "gad",]),
-            }
-        );
         assert_eq!(relative.to_string(), "baz/gad");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1437,13 +1090,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/")?;
         let next = FsPath::new("/foo/bar/bad/gah")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "bad", "gah",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../bad/gah");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1452,13 +1098,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/")?;
         let next = FsPath::new("/foo/bad/gah")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..", "bad", "gah",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../../bad/gah");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1467,13 +1106,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/")?;
         let next = FsPath::new("/foo/bar/baz")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "baz",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../baz");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1482,13 +1114,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/")?;
         let next = FsPath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..", "bar",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../../bar");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1497,14 +1122,7 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/")?;
         let next = FsPath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..",]),
-            }
-        );
-        assert_eq!(relative.to_string(), "..");
+        assert_eq!(relative.to_string(), "../");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
         assert!(!relative.is_windows());
@@ -1512,13 +1130,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/")?;
         let next = FsPath::new("/foo/bar/baz/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec![]),
-            }
-        );
         assert_eq!(relative.to_string(), "");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
@@ -1527,13 +1138,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/")?;
         let next = FsPath::new("/foo/bar/baz/gad")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["gad",]),
-            }
-        );
         assert_eq!(relative.to_string(), "gad");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1542,13 +1146,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
         let next = FsPath::new("/foo/bar/bad/gah")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..", "bad", "gah",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../../bad/gah");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1557,13 +1154,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
         let next = FsPath::new("/foo/bad/gah")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..", "..", "bad", "gah",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../../../bad/gah");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1572,13 +1162,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
         let next = FsPath::new("/foo/bar/baz")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..", "baz",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../../baz");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1587,13 +1170,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
         let next = FsPath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..", "..", "bar",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../../../bar");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
@@ -1602,14 +1178,7 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
         let next = FsPath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "..",]),
-            }
-        );
-        assert_eq!(relative.to_string(), "../..");
+        assert_eq!(relative.to_string(), "../../");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
         assert!(!relative.is_windows());
@@ -1617,14 +1186,7 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
         let next = FsPath::new("/foo/bar/baz/")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..",]),
-            }
-        );
-        assert_eq!(relative.to_string(), "..");
+        assert_eq!(relative.to_string(), "../");
         assert!(!relative.is_absolute());
         assert!(relative.is_directory());
         assert!(!relative.is_windows());
@@ -1632,13 +1194,6 @@ mod tests {
         let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
         let next = FsPath::new("/foo/bar/baz/gad")?;
         let relative = base.relative(&next)?;
-        assert_eq!(
-            relative,
-            FsPath {
-                prefix: None,
-                components: components(vec!["..", "gad",]),
-            }
-        );
         assert_eq!(relative.to_string(), "../gad");
         assert!(!relative.is_absolute());
         assert!(!relative.is_directory());
