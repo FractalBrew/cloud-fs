@@ -66,10 +66,6 @@ where
             base: Box::new(base),
         }
     }
-
-    pub(crate) fn from_error(error: FsError) -> Self {
-        Self::from_stream(stream::once(Err(error)))
-    }
 }
 
 impl<R> Stream for FsStream<R>

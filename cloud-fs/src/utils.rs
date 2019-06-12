@@ -1,26 +1,5 @@
 use tokio::prelude::*;
 
-struct FutureHolder<I, E>
-where
-    I: Sized + Send + Sync,
-    E: Sized + Send + Sync,
-{
-    future: Box<Future<Item = I, Error = E> + Send + Sync + 'static>,
-}
-
-impl<I, E> Future for FutureHolder<I, E>
-where
-    I: Sized + Send + Sync,
-    E: Sized + Send + Sync,
-{
-    type Item = I;
-    type Error = E;
-
-    fn poll(&mut self) -> Result<Async<I>, E> {
-        self.future.poll()
-    }
-}
-
 struct StreamHolder<I, E>
 where
     I: Sized + Send + Sync,
@@ -95,6 +74,7 @@ where
     }
 }
 
+#[derive(Default)]
 pub struct MergedStreams<I, E>
 where
     I: Sized + Send + Sync,
@@ -144,6 +124,10 @@ where
     type Error = E;
 
     fn poll(&mut self) -> Result<Async<Option<I>>, E> {
+        if self.streams.is_empty() {
+            return Ok(Async::Ready(None));
+        }
+
         let mut i = 0;
         while i < self.streams.len() {
             let stream = &mut self.streams[i];
@@ -151,6 +135,9 @@ where
                 Ok(Async::Ready(Some(i))) => return Ok(Async::Ready(Some(i))),
                 Ok(Async::Ready(None)) => {
                     self.streams.remove(i);
+                    if self.streams.is_empty() {
+                        return Ok(Async::Ready(None));
+                    }
                     continue;
                 }
                 Ok(Async::NotReady) => {

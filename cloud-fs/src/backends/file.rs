@@ -1,7 +1,7 @@
 extern crate tokio_fs;
 
 use std::fs::Metadata;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::fs::*;
 use tokio_fs::DirEntry;
@@ -12,17 +12,17 @@ use crate::utils::{stream_from_future, MergedStreams};
 use crate::*;
 
 struct FileLister {
-    base: FsPath,
     entries: Vec<DirEntry>,
     stream: MergedStreams<DirEntry, FsError>,
+    stream_is_done: bool,
 }
 
 impl FileLister {
-    fn list(base: FsPath, path: PathBuf) -> FileLister {
+    fn list(path: PathBuf) -> FileLister {
         let mut lister = FileLister {
-            base,
             entries: Vec::new(),
             stream: MergedStreams::new(),
+            stream_is_done: false,
         };
 
         lister.add_directory(path);
@@ -32,20 +32,18 @@ impl FileLister {
     fn add_directory(&mut self, path: PathBuf) {
         self.stream
             .push(stream_from_future(read_dir(path)).map_err(FsError::from_error));
+        self.stream_is_done = false;
     }
 
     fn add_dir_entry(&mut self, entry: DirEntry) {
         self.entries.push(entry);
     }
 
-    fn into_file(&self, entry: &DirEntry, metadata: &Metadata) -> FsResult<FsFile> {
-        Ok(FsFile {
-            path: FsPath::from_std_path(&entry.path())?,
-            size: Some(metadata.len()),
-        })
-    }
+    fn poll_entries(&mut self) -> FsResult<Option<(DirEntry, Metadata)>> {
+        if self.entries.is_empty() {
+            return Ok(None);
+        }
 
-    fn poll_entries(&mut self) -> Result<Option<FsFile>, FsError> {
         let mut i = 0;
         while i < self.entries.len() {
             match self.entries[i].poll_metadata() {
@@ -55,7 +53,7 @@ impl FileLister {
                     if metadata.is_dir() {
                         self.add_directory(entry.path().to_owned());
                     } else if metadata.is_file() {
-                        return Ok(Some(self.into_file(&entry, &metadata)?));
+                        return Ok(Some((entry, metadata)));
                     }
                 }
                 Ok(Async::NotReady) => i += 1,
@@ -69,27 +67,50 @@ impl FileLister {
         Ok(None)
     }
 
-    fn poll_stream(&mut self) -> Result<bool, FsError> {
-        match self.stream.poll()? {
-            Async::Ready(Some(entry)) => {
-                self.add_dir_entry(entry);
-                Ok(true)
-            }
-            Async::Ready(None) => Ok(false),
-            Async::NotReady => Ok(true),
+    fn poll_stream(&mut self) -> FsResult<()> {
+        if self.stream_is_done {
+            return Ok(());
         }
+
+        loop {
+            match self.stream.poll() {
+                Ok(Async::Ready(Some(entry))) => {
+                    self.add_dir_entry(entry);
+                }
+                Ok(Async::Ready(None)) => {
+                    self.stream_is_done = true;
+                    break;
+                }
+                Ok(Async::NotReady) => {
+                    break;
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
 impl Stream for FileLister {
-    type Item = FsFile;
+    type Item = (DirEntry, Metadata);
     type Error = FsError;
 
     fn poll(&mut self) -> FsStreamPoll<Self::Item> {
-        if !self.poll_stream()? && self.entries.is_empty() {
+        // Load up as many entries as we can.
+        self.poll_stream()?;
+
+        // Find one that is ready
+        let poll_result = self.poll_entries()?;
+        if poll_result.is_some() {
+            return Ok(Async::Ready(poll_result));
+        }
+
+        // Are we done?
+        if self.stream_is_done && self.entries.is_empty() {
             Ok(Async::Ready(None))
-        } else if let Some(file) = self.poll_entries()? {
-            Ok(Async::Ready(Some(file)))
         } else {
             Ok(Async::NotReady)
         }
@@ -111,44 +132,75 @@ impl FileBackend {
         })
     }
 
-    fn get_target(&self, path: &FsPath) -> FsResult<PathBuf> {
+    fn fs_path_into_real_path(base: &FsPath, path: &FsPath) -> FsResult<PathBuf> {
         // We know that the path is absolute and not windows-like here.
-        //let mut relative = path.clone();
-        //relative.components.remove(0);
+        let mut relative = path.clone();
+        relative.is_absolute = false;
+        let target = base.join(&relative)?;
 
-        //let target = self.settings.path.join(&relative)?;
-        Ok(PathBuf::from(path.to_string()))
+        Ok(target.as_std_path())
+    }
+
+    fn real_path_into_fs_path(base: &FsPath, path: &Path) -> FsResult<FsPath> {
+        let fspath = FsPath::from_std_path(path)?;
+
+        let mut relative = base.relative(&fspath)?;
+        if relative.is_above_base() {
+            return Err(FsError::new(
+                FsErrorType::InvalidPath,
+                "Received an invalid path from the filesystem.",
+            ));
+        }
+
+        relative.is_absolute = true;
+        Ok(relative)
+    }
+
+    fn get_fsfile(base: &FsPath, entry: DirEntry, metadata: Metadata) -> FsResult<FsFile> {
+        Ok(FsFile {
+            path: FileBackend::real_path_into_fs_path(base, &entry.path())?,
+            size: metadata.len(),
+        })
+    }
+
+    fn get_api_target(&self, path: &FsPath) -> FsResult<PathBuf> {
+        FileBackend::fs_path_into_real_path(&self.settings.path, path)
     }
 }
 
 impl FsImpl for FileBackend {
     fn list_files(&self, path: &FsPath) -> FileListFuture {
-        match self.get_target(path) {
-            Ok(target) => FileListFuture::from_item(FileListStream::from_stream(FileLister::list(
-                self.settings.path.clone(),
-                target,
-            ))),
+        match self.get_api_target(path) {
+            Ok(target) => {
+                let base = self.settings.path.clone();
+                let file_list = FileLister::list(target).then(move |result| {
+                    result.and_then(|(entry, metadata)| {
+                        FileBackend::get_fsfile(&base, entry, metadata)
+                    })
+                });
+                FileListFuture::from_item(FileListStream::from_stream(file_list))
+            }
             Err(error) => FileListFuture::from_error(error),
         }
     }
 
     fn get_file(&self, path: &FsPath) -> FileFuture {
-        let target = self.get_target(path);
+        let _target = self.get_api_target(path);
         unimplemented!();
     }
 
     fn delete_file(&self, path: &FsPath) -> OperationCompleteFuture {
-        let target = self.get_target(path);
+        let _target = self.get_api_target(path);
         unimplemented!();
     }
 
     fn get_file_stream(&self, path: &FsPath) -> DataStreamFuture {
-        let target = self.get_target(path);
+        let _target = self.get_api_target(path);
         unimplemented!();
     }
 
-    fn write_from_stream(&self, path: &FsPath, stream: DataStream) -> OperationCompleteFuture {
-        let target = self.get_target(path);
+    fn write_from_stream(&self, path: &FsPath, _stream: DataStream) -> OperationCompleteFuture {
+        let _target = self.get_api_target(path);
         unimplemented!();
     }
 }

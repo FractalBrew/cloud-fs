@@ -7,29 +7,29 @@ pub struct B2Backend {
 }
 
 impl B2Backend {
-    pub fn connect(settings: FsSettings) -> ConnectFuture {
+    pub fn connect(_settings: FsSettings) -> ConnectFuture {
         unimplemented!();
     }
 }
 
 impl FsImpl for B2Backend {
-    fn list_files(&self, path: &FsPath) -> FileListFuture {
+    fn list_files(&self, _path: &FsPath) -> FileListFuture {
         unimplemented!();
     }
 
-    fn get_file(&self, path: &FsPath) -> FileFuture {
+    fn get_file(&self, _path: &FsPath) -> FileFuture {
         unimplemented!();
     }
 
-    fn delete_file(&self, path: &FsPath) -> OperationCompleteFuture {
+    fn delete_file(&self, _path: &FsPath) -> OperationCompleteFuture {
         unimplemented!();
     }
 
-    fn get_file_stream(&self, path: &FsPath) -> DataStreamFuture {
+    fn get_file_stream(&self, _path: &FsPath) -> DataStreamFuture {
         unimplemented!();
     }
 
-    fn write_from_stream(&self, path: &FsPath, stream: DataStream) -> OperationCompleteFuture {
+    fn write_from_stream(&self, _path: &FsPath, _stream: DataStream) -> OperationCompleteFuture {
         unimplemented!();
     }
 }

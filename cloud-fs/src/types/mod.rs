@@ -17,6 +17,7 @@ pub enum FsErrorType {
     ParseError,
     HostNotSupported,
     InvalidPath,
+    InvalidSettings,
     Other,
 }
 
@@ -77,7 +78,7 @@ impl FsSettings {
 #[derive(Clone, PartialEq, Debug)]
 pub struct FsFile {
     pub(crate) path: FsPath,
-    pub(crate) size: Option<u64>,
+    pub(crate) size: u64,
 }
 
 impl FsFile {
@@ -85,7 +86,7 @@ impl FsFile {
         &self.path
     }
 
-    pub fn size(&self) -> Option<u64> {
+    pub fn size(&self) -> u64 {
         self.size
     }
 }

@@ -95,6 +95,18 @@ impl Fs {
 
     /// Create a new `Fs` based on the settings passed.
     pub fn new(settings: FsSettings) -> ConnectFuture {
+        if !settings.path.is_absolute() {
+            return ConnectFuture::from_error(FsError::new(
+                FsErrorType::InvalidSettings,
+                "Fs must be initialized with an absolute path.",
+            ));
+        } else if !settings.path.is_directory() {
+            return ConnectFuture::from_error(FsError::new(
+                FsErrorType::InvalidSettings,
+                "Fs must be initialized with a directory path.",
+            ));
+        }
+
         connect(settings)
     }
 
