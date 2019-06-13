@@ -126,8 +126,7 @@ impl Fs {
     /// Because the majority of cloud storage systems do not really have a
     /// notion of directories and files, just file identifiers, this function
     /// will return any files that have an identifier prefixed by `path`.
-    pub fn list_files(&self, path: FsPath) -> FileListFuture
-    {
+    pub fn list_files(&self, path: FsPath) -> FileListFuture {
         if let Err(e) = self.check_path(&path, true) {
             return FileListFuture::from_error(e);
         }
@@ -138,8 +137,7 @@ impl Fs {
     /// Gets info about the file at the given path.
     ///
     /// This will return an error if the file does not exist.
-    pub fn get_file(&self, path: FsPath) -> FileFuture
-    {
+    pub fn get_file(&self, path: FsPath) -> FileFuture {
         if let Err(e) = self.check_path(&path, false) {
             return FileFuture::from_error(e);
         }
@@ -151,8 +149,7 @@ impl Fs {
     ///
     /// This will not resolve to an error if the file already does not exist. It
     /// will return an error if the attempt to delete the file failed.
-    pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture
-    {
+    pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
         if let Err(e) = self.check_path(&path, false) {
             return OperationCompleteFuture::from_error(e);
         }
@@ -165,8 +162,7 @@ impl Fs {
     /// The data returned is not necessarily in any particular chunk size.
     /// Dropping the stream at any point before completion should be considered
     /// to be safe.
-    pub fn get_file_stream(&self, path: FsPath) -> DataStreamFuture
-    {
+    pub fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
         if let Err(e) = self.check_path(&path, false) {
             return DataStreamFuture::from_error(e);
         }

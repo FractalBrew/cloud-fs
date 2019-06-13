@@ -17,14 +17,6 @@ use cloud_fs::*;
 
 const MB: u64 = 1024 * 1024;
 
-/*fn assert<S: AsRef<str>>(check: bool, message: S) -> FsResult<()> {
-    if check {
-        Ok(())
-    } else {
-        Err(FsError::new(FsErrorType::TestFailure, format!("assertion failed: {}", message.as_ref())))
-    }
-}*/
-
 fn assert_eq<T: Debug + Eq, S: AsRef<str>>(left: T, right: T, message: S) -> FsResult<()> {
     if left == right {
         Ok(())
@@ -260,12 +252,15 @@ fn test_list_files(fs: &Fs) -> impl Future<Item = (), Error = FsError> {
 
 fn test_get_file(fs: &Fs) -> impl Future<Item = (), Error = FsError> {
     let path = FsPath::new("/largefile").unwrap();
-    fs.get_file(path)
-        .and_then(|file| {
-            assert_eq(file.path().to_string(), String::from("/largefile"), "Should have seen the right path.")?;
-            assert_eq(file.size(), 100 * MB, "Should have seen the right size.")?;
-            Ok(())
-        })
+    fs.get_file(path).and_then(|file| {
+        assert_eq(
+            file.path().to_string(),
+            String::from("/largefile"),
+            "Should have seen the right path.",
+        )?;
+        assert_eq(file.size(), 100 * MB, "Should have seen the right size.")?;
+        Ok(())
+    })
 }
 
 fn test_delete_file(_fs: &Fs) -> impl Future<Item = (), Error = FsError> {

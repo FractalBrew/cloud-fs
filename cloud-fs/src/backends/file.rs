@@ -2,8 +2,8 @@
 extern crate tokio_fs;
 
 use std::fs::Metadata;
-use std::path::{Path, PathBuf};
 use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
 use tokio::fs::*;
 use tokio_fs::DirEntry;
@@ -193,25 +193,28 @@ impl FsImpl for FileBackend {
             Ok(target) => {
                 let base = self.settings.path.clone();
 
-                FileFuture::from_future(metadata(target.clone())
-                    .then(move |r| {
-                        match r {
-                            Ok(m) => {
-                                if m.is_file() {
-                                    FileBackend::get_fsfile(&base, target, m)
-                                } else {
-                                    Err(FsError::new(FsErrorType::NotFound, format!("{} was not found.", path)))
-                                }
-                            },
-                            Err(e) => {
-                                if e.kind() == ErrorKind::NotFound {
-                                    Err(FsError::new(FsErrorType::NotFound, format!("{} was not found.", path)))
-                                } else {
-                                    Err(FsError::from_error(e))
-                                }
-                            }
+                FileFuture::from_future(metadata(target.clone()).then(move |r| match r {
+                    Ok(m) => {
+                        if m.is_file() {
+                            FileBackend::get_fsfile(&base, target, m)
+                        } else {
+                            Err(FsError::new(
+                                FsErrorType::NotFound,
+                                format!("{} was not found.", path),
+                            ))
                         }
-                    }))
+                    }
+                    Err(e) => {
+                        if e.kind() == ErrorKind::NotFound {
+                            Err(FsError::new(
+                                FsErrorType::NotFound,
+                                format!("{} was not found.", path),
+                            ))
+                        } else {
+                            Err(FsError::from_error(e))
+                        }
+                    }
+                }))
             }
             Err(error) => FileFuture::from_error(error),
         }
