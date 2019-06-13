@@ -205,7 +205,7 @@ impl FsPath {
     }
 
     /// Converts a `FsPath` into a std `PathBuf`.
-    pub fn as_std_path(&self) -> PathBuf {
+    pub(crate) fn as_std_path(&self) -> PathBuf {
         let mut path = self.to_string();
         if self.filename.is_none() && !self.directories.is_empty() {
             path.truncate(path.len() - 1);

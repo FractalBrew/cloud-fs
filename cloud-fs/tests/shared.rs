@@ -160,7 +160,7 @@ impl FileChecker {
 fn test_list_files(fs: &Fs) -> impl Future<Item = (), Error = FsError> {
     fn expect(
         fs: &Fs,
-        path: &FsPath,
+        path: FsPath,
         files: Vec<FileChecker>,
     ) -> impl Future<Item = (), Error = FsError> {
         fs.list_files(path)
@@ -253,13 +253,19 @@ fn test_list_files(fs: &Fs) -> impl Future<Item = (), Error = FsError> {
         },
     ];
 
-    expect(fs, &FsPath::new("/").unwrap(), all)
-        .join(expect(fs, &FsPath::new("/dir2/").unwrap(), sub))
+    expect(fs, FsPath::new("/").unwrap(), all)
+        .join(expect(fs, FsPath::new("/dir2/").unwrap(), sub))
         .map(|_| ())
 }
 
-fn test_get_file(_fs: &Fs) -> impl Future<Item = (), Error = FsError> {
-    future::finished::<(), FsError>(())
+fn test_get_file(fs: &Fs) -> impl Future<Item = (), Error = FsError> {
+    let path = FsPath::new("/largefile").unwrap();
+    fs.get_file(path)
+        .and_then(|file| {
+            assert_eq(file.path().to_string(), String::from("/largefile"), "Should have seen the right path.")?;
+            assert_eq(file.size(), 100 * MB, "Should have seen the right size.")?;
+            Ok(())
+        })
 }
 
 fn test_delete_file(_fs: &Fs) -> impl Future<Item = (), Error = FsError> {

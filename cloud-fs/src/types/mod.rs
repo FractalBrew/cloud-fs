@@ -22,6 +22,8 @@ pub enum FsErrorType {
     HostNotSupported,
     /// An error returns when attempting to access an invalid path.
     InvalidPath,
+    /// The item requested was not found.
+    NotFound,
     /// An error returns if the [`FsSettings`](struct.FsSettings.html) is
     /// invalid in some way.
     InvalidSettings,

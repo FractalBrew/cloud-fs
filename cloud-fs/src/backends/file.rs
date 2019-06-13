@@ -3,6 +3,7 @@ extern crate tokio_fs;
 
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
+use std::io::ErrorKind;
 
 use tokio::fs::*;
 use tokio_fs::DirEntry;
@@ -158,9 +159,9 @@ impl FileBackend {
         Ok(relative)
     }
 
-    fn get_fsfile(base: &FsPath, entry: DirEntry, metadata: Metadata) -> FsResult<FsFile> {
+    fn get_fsfile(base: &FsPath, path: PathBuf, metadata: Metadata) -> FsResult<FsFile> {
         Ok(FsFile {
-            path: FileBackend::real_path_into_fs_path(base, &entry.path())?,
+            path: FileBackend::real_path_into_fs_path(base, &path)?,
             size: metadata.len(),
         })
     }
@@ -171,13 +172,14 @@ impl FileBackend {
 }
 
 impl FsImpl for FileBackend {
-    fn list_files(&self, path: &FsPath) -> FileListFuture {
-        match self.get_api_target(path) {
+    fn list_files(&self, path: FsPath) -> FileListFuture {
+        match self.get_api_target(&path) {
             Ok(target) => {
                 let base = self.settings.path.clone();
+
                 let file_list = FileLister::list(target).then(move |result| {
                     result.and_then(|(entry, metadata)| {
-                        FileBackend::get_fsfile(&base, entry, metadata)
+                        FileBackend::get_fsfile(&base, entry.path(), metadata)
                     })
                 });
                 FileListFuture::from_item(FileListStream::from_stream(file_list))
@@ -186,23 +188,47 @@ impl FsImpl for FileBackend {
         }
     }
 
-    fn get_file(&self, path: &FsPath) -> FileFuture {
-        let _target = self.get_api_target(path);
+    fn get_file(&self, path: FsPath) -> FileFuture {
+        match self.get_api_target(&path) {
+            Ok(target) => {
+                let base = self.settings.path.clone();
+
+                FileFuture::from_future(metadata(target.clone())
+                    .then(move |r| {
+                        match r {
+                            Ok(m) => {
+                                if m.is_file() {
+                                    FileBackend::get_fsfile(&base, target, m)
+                                } else {
+                                    Err(FsError::new(FsErrorType::NotFound, format!("{} was not found.", path)))
+                                }
+                            },
+                            Err(e) => {
+                                if e.kind() == ErrorKind::NotFound {
+                                    Err(FsError::new(FsErrorType::NotFound, format!("{} was not found.", path)))
+                                } else {
+                                    Err(FsError::from_error(e))
+                                }
+                            }
+                        }
+                    }))
+            }
+            Err(error) => FileFuture::from_error(error),
+        }
+    }
+
+    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
+        let _target = self.get_api_target(&path);
         unimplemented!();
     }
 
-    fn delete_file(&self, path: &FsPath) -> OperationCompleteFuture {
-        let _target = self.get_api_target(path);
+    fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
+        let _target = self.get_api_target(&path);
         unimplemented!();
     }
 
-    fn get_file_stream(&self, path: &FsPath) -> DataStreamFuture {
-        let _target = self.get_api_target(path);
-        unimplemented!();
-    }
-
-    fn write_from_stream(&self, path: &FsPath, _stream: DataStream) -> OperationCompleteFuture {
-        let _target = self.get_api_target(path);
+    fn write_from_stream(&self, path: FsPath, _stream: DataStream) -> OperationCompleteFuture {
+        let _target = self.get_api_target(&path);
         unimplemented!();
     }
 }
