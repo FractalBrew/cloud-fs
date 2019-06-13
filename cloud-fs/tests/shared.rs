@@ -4,11 +4,11 @@ extern crate tokio;
 
 use std::fmt::Debug;
 use std::fs::{create_dir_all, File};
-use std::io::Write;
 use std::io::BufWriter;
+use std::io::Write;
+use std::iter::empty;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::iter::empty;
 
 use tempfile::{tempdir, TempDir};
 use tokio::prelude::*;
@@ -49,7 +49,11 @@ struct ContentIterator {
 
 impl ContentIterator {
     fn new(seed: u8, length: u64) -> ContentIterator {
-        ContentIterator { value: seed, length, count: 0, }
+        ContentIterator {
+            value: seed,
+            length,
+            count: 0,
+        }
     }
 }
 
@@ -99,7 +103,11 @@ pub fn prepare_test() -> FsResult<TempDir> {
     dir.push("dir1");
     create_dir_all(dir.clone())?;
 
-    write_file(&dir, "smallfile.txt", b"This is quite a short file.".iter().cloned())?;
+    write_file(
+        &dir,
+        "smallfile.txt",
+        b"This is quite a short file.".iter().cloned(),
+    )?;
     write_file(&dir, "largefile", ContentIterator::new(0, 100 * MB))?;
     write_file(&dir, "mediumfile", ContentIterator::new(58, 5 * MB))?;
 

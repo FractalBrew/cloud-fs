@@ -21,7 +21,9 @@ where
     where
         S: Stream<Item = I, Error = E> + Send + Sync + 'static,
     {
-        StreamHolder { stream: Box::new(stream) }
+        StreamHolder {
+            stream: Box::new(stream),
+        }
     }
 }
 
