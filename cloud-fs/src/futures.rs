@@ -3,9 +3,13 @@ use tokio::prelude::*;
 use crate::types::*;
 use crate::Fs;
 
-pub type FsPoll<R> = Poll<R, FsError>;
-pub type FsStreamPoll<R> = Poll<Option<R>, FsError>;
+type FsPoll<R> = Poll<R, FsError>;
+type FsStreamPoll<R> = Poll<Option<R>, FsError>;
 
+/// A Future whose error is always an [`FsError'](struct.FsError.html).
+///
+/// This is mostly used to hide the underlying futures in use which may change
+/// frequently.
 pub struct FsFuture<R>
 where
     R: Send + Sync + 'static,
@@ -47,6 +51,10 @@ where
     }
 }
 
+/// A Stream whose error is always an [`FsError'](struct.FsError.html).
+///
+/// This is mostly used to hide the underlying streams in use which may change
+/// frequently.
 pub struct FsStream<R>
 where
     R: Send + Sync + 'static,
@@ -80,10 +88,17 @@ where
     }
 }
 
+/// A stream that returns Bytes.
 pub type DataStream = FsStream<Data>;
+/// A future that returns a [`Fs`](struct.Fs.html) implementation.
 pub type ConnectFuture = FsFuture<Fs>;
+/// A stream that returns [`FsFile`s](struct.FsFile.html).
 pub type FileListStream = FsStream<FsFile>;
+/// A future that returns a [`FileListStream`](type.FileListStream.html).
 pub type FileListFuture = FsFuture<FileListStream>;
+/// A future that returns a [`FsFile`](type.FsFile.html).
 pub type FileFuture = FsFuture<FsFile>;
+/// A future that just resolves when whatever operation is complete.
 pub type OperationCompleteFuture = FsFuture<()>;
+/// A future that resolves to a [`DataStream`](type.DataStream.html).
 pub type DataStreamFuture = FsFuture<DataStream>;

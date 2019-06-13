@@ -5,8 +5,10 @@ extern crate tokio;
 use std::fmt::Debug;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
+use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::iter::empty;
 
 use tempfile::{tempdir, TempDir};
 use tokio::prelude::*;
@@ -41,11 +43,13 @@ fn assert_eq<T: Debug + Eq, S: AsRef<str>>(left: T, right: T, message: S) -> FsR
 
 struct ContentIterator {
     value: u8,
+    length: u64,
+    count: u64,
 }
 
 impl ContentIterator {
-    fn new(seed: u8) -> ContentIterator {
-        ContentIterator { value: seed }
+    fn new(seed: u8, length: u64) -> ContentIterator {
+        ContentIterator { value: seed, length, count: 0, }
     }
 }
 
@@ -53,6 +57,11 @@ impl Iterator for ContentIterator {
     type Item = u8;
 
     fn next(&mut self) -> Option<u8> {
+        if self.count >= self.length {
+            return None;
+        }
+
+        self.count += 1;
         let new_value = self.value;
         let (new_value, _) = new_value.overflowing_add(27);
         let (new_value, _) = new_value.overflowing_mul(9);
@@ -62,29 +71,22 @@ impl Iterator for ContentIterator {
     }
 }
 
-fn build_content(seed: u8, length: u64) -> Vec<u8> {
-    let mut buffer: Vec<u8> = vec![0; length as usize];
-
-    let mut iter = ContentIterator::new(seed);
-
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..buffer.len() {
-        match iter.next() {
-            Some(val) => buffer[i] = val,
-            None => unreachable!(),
-        }
-    }
-
-    buffer
-}
-
-fn write_file(dir: &PathBuf, name: &str, content: &[u8]) -> FsResult<()> {
+fn write_file<I: IntoIterator<Item = u8>>(dir: &PathBuf, name: &str, content: I) -> FsResult<()> {
     let mut target = dir.clone();
     target.push(name);
 
-    let mut file = File::create(target)?;
-    file.write_all(content)?;
-    file.sync_all()?;
+    let file = File::create(target)?;
+    let mut writer = BufWriter::new(file);
+
+    for b in content {
+        loop {
+            if writer.write(&[b])? == 1 {
+                break;
+            }
+        }
+    }
+
+    writer.flush()?;
 
     Ok(())
 }
@@ -97,20 +99,20 @@ pub fn prepare_test() -> FsResult<TempDir> {
     dir.push("dir1");
     create_dir_all(dir.clone())?;
 
-    write_file(&dir, "smallfile.txt", b"This is quite a short file.")?;
-    write_file(&dir, "largefile", &build_content(0, 100 * MB))?;
-    write_file(&dir, "mediumfile", &build_content(58, 5 * MB))?;
+    write_file(&dir, "smallfile.txt", b"This is quite a short file.".iter().cloned())?;
+    write_file(&dir, "largefile", ContentIterator::new(0, 100 * MB))?;
+    write_file(&dir, "mediumfile", ContentIterator::new(58, 5 * MB))?;
 
     dir.push("dir2");
     create_dir_all(dir.clone())?;
-    write_file(&dir, "foo", b"")?;
-    write_file(&dir, "bar", b"")?;
-    write_file(&dir, "0foo", b"")?;
-    write_file(&dir, "5diz", b"")?;
-    write_file(&dir, "1bar", b"")?;
-    write_file(&dir, "daz", b"")?;
-    write_file(&dir, "hop", b"")?;
-    write_file(&dir, "yu", b"")?;
+    write_file(&dir, "foo", empty())?;
+    write_file(&dir, "bar", empty())?;
+    write_file(&dir, "0foo", empty())?;
+    write_file(&dir, "5diz", empty())?;
+    write_file(&dir, "1bar", empty())?;
+    write_file(&dir, "daz", empty())?;
+    write_file(&dir, "hop", empty())?;
+    write_file(&dir, "yu", empty())?;
 
     Ok(temp)
 }

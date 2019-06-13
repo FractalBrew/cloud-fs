@@ -1,18 +1,19 @@
-//! An abstract asynchronous API for accessing a filesystem that coukd be on any of a number of different local and cloud storage backends.
+//! An abstract asynchronous API for accessing a filesystem that could be on any of a number of different local and cloud storage backends.
 //!
 //! The API offers functions for listing, reading, writing and deleting files
 //! from a storage backend. Each backend offers the same API plus in some cases
 //! some additional backend specific functionality.
 //!
 //! Obviously offering the same API across all backends means the API is fairly
-//! basic, but if all you want to do is write, read or list files is should be
+//! basic, but if all you want to do is write, read or list files it should be
 //! plenty.
 //!
 //! Which backend is available depends on the features cloud-fs is compiled
 //! with, by default all are included. See the [backends module](backends/index.html)
 //! for a list of the backends.
-// #![warn(missing_docs)]
-// #![warn(clippy::missing_docs_in_private_items)]
+//!
+//! The [`Fs`](struct.Fs.html) is the main API used to access storage.
+#![warn(missing_docs)]
 
 extern crate bytes;
 extern crate tokio;
@@ -29,7 +30,7 @@ use bytes::{Bytes, IntoBuf};
 use tokio::prelude::*;
 
 use backends::connect;
-pub use backends::{Backend, BackendImplementation};
+use backends::*;
 pub use futures::*;
 pub use types::{FsError, FsErrorType, FsFile, FsPath, FsResult, FsSettings};
 
@@ -61,6 +62,7 @@ trait FsImpl {
     fn write_from_stream(&self, path: &FsPath, stream: DataStream) -> OperationCompleteFuture;
 }
 
+/// The main implementation used to interact with a storage backend.
 #[derive(Debug)]
 pub struct Fs {
     backend: BackendImplementation,

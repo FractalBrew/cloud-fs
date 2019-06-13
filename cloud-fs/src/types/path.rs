@@ -158,6 +158,15 @@ impl Ord for Prefix {
     }
 }
 
+/// A path in storage.
+///
+/// This is similar to PathBuf except that it supports windows and non-windows
+/// style paths on all platforms. Generally all of the backends use non-windows
+/// style paths for referencing files. This struct contains functions for
+/// manipulating and parsing those paths.
+///
+/// One chief difference is that paths that end with `/` are considered to be
+/// directories, those without are files.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FsPath {
     pub(crate) prefix: Option<Prefix>,
@@ -183,6 +192,7 @@ impl FsPath {
         }
     }
 
+    /// Creates a `FsPath` from a `Path` from std.
     pub fn from_std_path(path: &Path) -> FsResult<FsPath> {
         if let Some(string) = path.to_str() {
             FsPath::new(string)
@@ -194,6 +204,7 @@ impl FsPath {
         }
     }
 
+    /// Converts a `FsPath` into a std `PathBuf`.
     pub fn as_std_path(&self) -> PathBuf {
         let mut path = self.to_string();
         if self.filename.is_none() && !self.directories.is_empty() {
@@ -202,6 +213,7 @@ impl FsPath {
         PathBuf::from(path)
     }
 
+    /// Parses a string into a new `FsPath`.
     pub fn new<S: AsRef<str>>(from: S) -> FsResult<FsPath> {
         let path = from.as_ref();
         let mut pos: usize = 0;
@@ -244,18 +256,23 @@ impl FsPath {
         Ok(result)
     }
 
+    /// Tests whether this `FsPath` is an absolute path.
     pub fn is_absolute(&self) -> bool {
         self.is_absolute
     }
 
+    /// Tests whether this `FsPath` is expected to be a directory.
     pub fn is_directory(&self) -> bool {
         self.filename.is_none()
     }
 
+    /// Tests whether this `FsPath` is a windows style path.
     pub fn is_windows(&self) -> bool {
         self.prefix.is_some()
     }
 
+    /// Returns true if either this path is absolute or when joining it with an
+    /// absolute path will move above the absolute path's directory.
     pub fn is_above_base(&self) -> bool {
         self.is_absolute
             || (!self.directories.is_empty() && self.directories[0].as_str() == PARENT_DIR)
@@ -319,6 +336,10 @@ impl FsPath {
         Ok(())
     }
 
+    /// Returns a relative path that when joined to this path will return the
+    /// target path.
+    ///
+    /// Both this `FsPath` and the target `FsPath` must be absolute.
     pub fn relative(&self, target: &FsPath) -> FsResult<FsPath> {
         if !self.is_absolute || !target.is_absolute {
             return Err(FsError::new(
@@ -357,6 +378,7 @@ impl FsPath {
         Ok(relative)
     }
 
+    /// Joins a relative path to the current path and returns the result.
     pub fn join(&self, path: &FsPath) -> FsResult<FsPath> {
         self.assert_is_normalized();
         path.assert_is_normalized();
@@ -377,6 +399,9 @@ impl FsPath {
         Ok(joined)
     }
 
+    /// Moves this `FsPath` to the named subdirectory.
+    ///
+    /// This will throw away the filename from the path.
     pub fn push_dir(&mut self, dir: &str) {
         self.directories.push(dir.to_owned());
         self.filename = None;

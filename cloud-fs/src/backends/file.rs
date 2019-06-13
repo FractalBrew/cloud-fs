@@ -1,3 +1,4 @@
+//! Accesses files on the local filesystem. Included with the feature "file".
 extern crate tokio_fs;
 
 use std::fs::Metadata;
@@ -98,7 +99,7 @@ impl Stream for FileLister {
     type Item = (DirEntry, Metadata);
     type Error = FsError;
 
-    fn poll(&mut self) -> FsStreamPoll<Self::Item> {
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         // Load up as many entries as we can.
         self.poll_stream()?;
 
@@ -117,13 +118,14 @@ impl Stream for FileLister {
     }
 }
 
-/// Accesses files on the local filesystem. Included with the feature "file".
+/// The backend implementation for local file storage.
 #[derive(Debug)]
 pub struct FileBackend {
     settings: FsSettings,
 }
 
 impl FileBackend {
+    /// Creates a new instance of the file backend.
     pub fn connect(settings: FsSettings) -> ConnectFuture {
         ConnectFuture::from_item(Fs {
             backend: BackendImplementation::File(FileBackend {

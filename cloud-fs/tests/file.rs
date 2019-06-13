@@ -3,7 +3,8 @@ extern crate cloud_fs;
 mod shared;
 use shared::*;
 
-use cloud_fs::{Backend, FsPath, FsResult, FsSettings};
+use cloud_fs::{FsPath, FsResult, FsSettings};
+use cloud_fs::backends::Backend;
 
 #[test]
 fn test_file_backend() -> FsResult<()> {

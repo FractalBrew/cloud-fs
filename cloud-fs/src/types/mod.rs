@@ -12,16 +12,27 @@ pub use path::FsPath;
 
 pub type Data = Bytes;
 
+/// The type of an [`FsError`](struct.FsError.html).
 #[derive(Clone, Debug)]
 pub enum FsErrorType {
+    /// An error that occuring while parsing or manipulating a
+    /// [`FsPath`](struct.FsPath.html].
     ParseError,
+    /// An error a backend may return if an invalid storage host was requested.
     HostNotSupported,
+    /// An error returns when attempting to access an invalid path.
     InvalidPath,
+    /// An error returns if the [`FsSettings`](struct.FsSettings.html) is
+    /// invalid in some way.
     InvalidSettings,
+    /// An error used internally to mark a test failure.
     TestFailure,
+    /// An unknown error type, usually a marker that this `FsError` was
+    /// generated from a different error type.
     Other,
 }
 
+/// The main error type used throughout this crate.
 #[derive(Clone, Debug)]
 pub struct FsError {
     error_type: FsErrorType,
@@ -29,6 +40,7 @@ pub struct FsError {
 }
 
 impl FsError {
+    /// Creates a new `FsError` instance
     pub fn new<S: AsRef<str>>(error_type: FsErrorType, description: S) -> FsError {
         FsError {
             error_type,
@@ -36,6 +48,7 @@ impl FsError {
         }
     }
 
+    /// Creates a new `FsError` out of some other kind of `Error`.
     pub fn from_error<E>(error: E) -> FsError
     where
         E: Error + fmt::Display,
@@ -58,8 +71,13 @@ impl From<io::Error> for FsError {
     }
 }
 
+/// A simple alias for a `Result` where the error is an [`FsError`](struct.FsError.html).
 pub type FsResult<R> = Result<R, FsError>;
 
+/// Settings used to create an [`Fs`](struct.Fs.html) instance.
+///
+/// Different backends may interpret these settings in different ways. Check
+/// the [`backends`](backends/index.html) for specific details.
 #[derive(Clone, Debug)]
 pub struct FsSettings {
     pub(crate) backend: Backend,
@@ -67,15 +85,18 @@ pub struct FsSettings {
 }
 
 impl FsSettings {
+    /// Creates settins for a specific backend with a given [`FsPath`](struct.FsPath.html).
     pub fn new(backend: Backend, path: FsPath) -> FsSettings {
         FsSettings { backend, path }
     }
 
+    /// Gets this setting's current [`Backend`](backends/enum.Backend.html).
     pub fn backend(&self) -> &Backend {
         &self.backend
     }
 }
 
+/// A file in storage.
 #[derive(Clone, PartialEq, Debug)]
 pub struct FsFile {
     pub(crate) path: FsPath,
@@ -83,10 +104,12 @@ pub struct FsFile {
 }
 
 impl FsFile {
+    /// Gets the file's path.
     pub fn path(&self) -> &FsPath {
         &self.path
     }
 
+    /// Gets the file's size.
     pub fn size(&self) -> u64 {
         self.size
     }

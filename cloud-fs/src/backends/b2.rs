@@ -1,12 +1,14 @@
+//! Accesses files in a Backblaze B2 bucket. Included with the feature "b2".
 use crate::*;
 
-/// Accesses files in a Backblaze B2 bucket. Included with the feature "b2".
+/// The backend implementation for B2 storage.
 #[derive(Debug)]
 pub struct B2Backend {
     settings: FsSettings,
 }
 
 impl B2Backend {
+    /// Creates a new instance of the B2 backend.
     pub fn connect(_settings: FsSettings) -> ConnectFuture {
         unimplemented!();
     }
