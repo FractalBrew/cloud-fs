@@ -18,6 +18,7 @@ pub enum FsErrorType {
     HostNotSupported,
     InvalidPath,
     InvalidSettings,
+    TestFailure,
     Other,
 }
 
@@ -28,14 +29,14 @@ pub struct FsError {
 }
 
 impl FsError {
-    pub(crate) fn new<S: AsRef<str>>(error_type: FsErrorType, description: S) -> FsError {
+    pub fn new<S: AsRef<str>>(error_type: FsErrorType, description: S) -> FsError {
         FsError {
             error_type,
             description: description.as_ref().to_owned(),
         }
     }
 
-    pub(crate) fn from_error<E>(error: E) -> FsError
+    pub fn from_error<E>(error: E) -> FsError
     where
         E: Error + fmt::Display,
     {

@@ -30,7 +30,7 @@ use tokio::prelude::*;
 
 use backends::connect;
 pub use backends::{Backend, BackendImplementation};
-use futures::*;
+pub use futures::*;
 pub use types::{FsError, FsErrorType, FsFile, FsPath, FsResult, FsSettings};
 
 /// The trait that every storage backend must implement at a minimum.

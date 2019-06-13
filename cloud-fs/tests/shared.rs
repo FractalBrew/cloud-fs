@@ -2,9 +2,11 @@ extern crate cloud_fs;
 extern crate tempfile;
 extern crate tokio;
 
+use std::fmt::Debug;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 use tempfile::{tempdir, TempDir};
 use tokio::prelude::*;
@@ -12,6 +14,30 @@ use tokio::prelude::*;
 use cloud_fs::*;
 
 const MB: u64 = 1024 * 1024;
+
+/*fn assert<S: AsRef<str>>(check: bool, message: S) -> FsResult<()> {
+    if check {
+        Ok(())
+    } else {
+        Err(FsError::new(FsErrorType::TestFailure, format!("assertion failed: {}", message.as_ref())))
+    }
+}*/
+
+fn assert_eq<T: Debug + Eq, S: AsRef<str>>(left: T, right: T, message: S) -> FsResult<()> {
+    if left == right {
+        Ok(())
+    } else {
+        Err(FsError::new(
+            FsErrorType::TestFailure,
+            format!(
+                "assertion failed: {}\n  left: `{:?}`\n right: `{:?}`",
+                message.as_ref(),
+                left,
+                right
+            ),
+        ))
+    }
+}
 
 struct ContentIterator {
     value: u8,
@@ -40,6 +66,8 @@ fn build_content(seed: u8, length: u64) -> Vec<u8> {
     let mut buffer: Vec<u8> = vec![0; length as usize];
 
     let mut iter = ContentIterator::new(seed);
+
+    #[allow(clippy::needless_range_loop)]
     for i in 0..buffer.len() {
         match iter.next() {
             Some(val) => buffer[i] = val,
@@ -93,26 +121,29 @@ struct FileChecker {
 }
 
 impl FileChecker {
-    fn check(&self, file: &FsFile) {
-        assert_eq!(file.path(), &self.path, "Should have the expected name.");
-        assert_eq!(
+    fn check(&self, file: &FsFile) -> FsResult<()> {
+        assert_eq(file.path(), &self.path, "Should have the expected name.")?;
+        assert_eq(
             file.size(),
             self.size,
-            "Should have the expected size for {}",
-            &self.path.to_string()
-        );
+            format!("Should have the expected size for {}", self.path),
+        )?;
+
+        Ok(())
     }
 
-    fn check_files(found: Vec<FsFile>, expected: Vec<FileChecker>) {
+    fn check_files(found: Vec<FsFile>, expected: Vec<FileChecker>) -> FsResult<()> {
         for (file, checker) in found.iter().zip(expected.iter()) {
-            checker.check(file);
+            checker.check(file)?;
         }
 
-        assert_eq!(
+        assert_eq(
             found.len(),
             expected.len(),
-            "Should have seen the right number of results."
-        );
+            "Should have seen the right number of results.",
+        )?;
+
+        Ok(())
     }
 }
 
@@ -124,9 +155,9 @@ fn test_list_files(fs: &Fs) -> impl Future<Item = (), Error = FsError> {
     ) -> impl Future<Item = (), Error = FsError> {
         fs.list_files(path)
             .and_then(|s| s.collect())
-            .map(move |mut results| {
+            .and_then(move |mut results| {
                 results.sort();
-                FileChecker::check_files(results, files);
+                FileChecker::check_files(results, files)
             })
     }
 
@@ -248,6 +279,23 @@ fn run_write_tests(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
 
 pub fn run_test(fs: Fs) -> impl Future<Item = (), Error = FsError> {
     run_read_tests(fs).and_then(run_write_tests).map(|_| ())
+}
+
+pub fn run(future: ConnectFuture) {
+    let (sender, receiver) = mpsc::channel::<FsResult<()>>();
+
+    tokio::run(future.and_then(run_test).then(move |result| {
+        sender.send(result).unwrap();
+        future::finished(())
+    }));
+
+    if let Err(e) = receiver.recv().unwrap() {
+        panic!("{}", e);
+    }
+}
+
+pub fn run_from_settings(settings: FsSettings) {
+    run(Fs::new(settings));
 }
 
 pub fn cleanup(temp: TempDir) -> FsResult<()> {
