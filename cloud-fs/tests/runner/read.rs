@@ -4,137 +4,71 @@ use super::utils::*;
 
 use cloud_fs::*;
 
-struct FileChecker {
-    path: FsPath,
-    size: u64,
-}
-
-impl FileChecker {
-    fn check(&self, file: &FsFile) -> FsResult<()> {
-        assert_eq(file.path(), &self.path, "Should have the expected name.")?;
-        assert_eq(
-            file.size(),
-            self.size,
-            format!("Should have the expected size for {}", self.path),
-        )?;
-
-        Ok(())
-    }
-
-    fn check_files(found: Vec<FsFile>, expected: Vec<FileChecker>) -> FsResult<()> {
-        for (file, checker) in found.iter().zip(expected.iter()) {
-            checker.check(file)?;
-        }
-
-        assert_eq(
-            found.len(),
-            expected.len(),
-            "Should have seen the right number of results.",
-        )?;
-
-        Ok(())
-    }
-}
-
 fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
-    fn expect(
+    fn test_list(
         fs: Fs,
         path: FsPath,
-        files: Vec<FileChecker>,
+        mut files: Vec<(&'static str, u64)>,
     ) -> impl Future<Item = Fs, Error = FsError> {
         fs.list_files(path)
             .and_then(|s| s.collect())
             .and_then(move |mut results| {
                 results.sort();
-                FileChecker::check_files(results, files)
+                assert_eq(
+                    results.len(),
+                    files.len(),
+                    "Should have seen the right number of results.",
+                )?;
+
+                for _ in 0..files.len() {
+                    let result = results.remove(0);
+                    let (pathstr, size) = files.remove(0);
+                    let path = FsPath::new(pathstr)?;
+
+                    assert_eq(result.path(), &path, "Should have the expected name.")?;
+                    assert_eq(
+                        result.size(),
+                        size,
+                        format!("Should have the expected size for {}", path),
+                    )?;
+                }
+                Ok(())
             })
-            .map(move |_| fs)
+            .map(|_| fs)
     }
 
-    let all = vec![
-        FileChecker {
-            path: FsPath::new("/largefile").unwrap(),
-            size: 100 * MB,
-        },
-        FileChecker {
-            path: FsPath::new("/mediumfile").unwrap(),
-            size: 5 * MB,
-        },
-        FileChecker {
-            path: FsPath::new("/smallfile.txt").unwrap(),
-            size: 27,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/0foo").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/1bar").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/5diz").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/bar").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/daz").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/foo").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/hop").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/yu").unwrap(),
-            size: 0,
-        },
-    ];
-
-    let sub = vec![
-        FileChecker {
-            path: FsPath::new("/dir2/0foo").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/1bar").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/5diz").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/bar").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/daz").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/foo").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/hop").unwrap(),
-            size: 0,
-        },
-        FileChecker {
-            path: FsPath::new("/dir2/yu").unwrap(),
-            size: 0,
-        },
-    ];
-
-    expect(fs, FsPath::new("/").unwrap(), all)
-        .and_then(|fs| expect(fs, FsPath::new("/dir2/").unwrap(), sub))
+    test_list(
+        fs,
+        FsPath::new("/").unwrap(),
+        vec![
+            ("/largefile", 100 * MB),
+            ("/mediumfile", 5 * MB),
+            ("/dir2/0foo", 0),
+            ("/dir2/1bar", 0),
+            ("/dir2/5diz", 0),
+            ("/dir2/bar", 0),
+            ("/dir2/daz", 0),
+            ("/dir2/foo", 0),
+            ("/dir2/hop", 0),
+            ("/dir2/yu", 0),
+        ],
+    )
+    .and_then(|fs| {
+        test_list(
+            fs,
+            FsPath::new("/dir2/").unwrap(),
+            vec![
+                ("/dir2/0foo", 0),
+                ("/dir2/1bar", 0),
+                ("/dir2/5diz", 0),
+                ("/dir2/bar", 0),
+                ("/dir2/daz", 0),
+                ("/dir2/foo", 0),
+                ("/dir2/hop", 0),
+                ("/dir2/yu", 0),
+            ],
+        )
+    })
 }
 
 fn test_get_file(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {

@@ -7,17 +7,17 @@ use std::path::PathBuf;
 
 pub const MB: u64 = 1024 * 1024;
 
-pub fn assert_eq<T: Debug + Eq, S: AsRef<str>>(left: T, right: T, message: S) -> FsResult<()> {
-    if left == right {
+pub fn assert_eq<T: Debug + Eq, S: AsRef<str>>(found: T, expected: T, message: S) -> FsResult<()> {
+    if found == expected {
         Ok(())
     } else {
         Err(FsError::new(
             FsErrorType::TestFailure,
             format!(
-                "assertion failed: {}\n  left: `{:?}`\n right: `{:?}`",
+                "assertion failed: {}\n    found: `{:?}`\n expected: `{:?}`",
                 message.as_ref(),
-                left,
-                right
+                found,
+                expected
             ),
         ))
     }
