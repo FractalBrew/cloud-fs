@@ -1,26 +1,70 @@
 use cloud_fs::*;
 
-use std::fmt::Debug;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 pub const MB: u64 = 1024 * 1024;
 
-pub fn assert_eq<T: Debug + Eq, S: AsRef<str>>(found: T, expected: T, message: S) -> FsResult<()> {
-    if found == expected {
-        Ok(())
-    } else {
-        Err(FsError::new(
-            FsErrorKind::TestFailure,
-            format!(
-                "assertion failed: {}\n    found: `{:?}`\n expected: `{:?}`",
-                message.as_ref(),
-                found,
-                expected
-            ),
-        ))
-    }
+macro_rules! test_assert {
+    ($check:expr) => {
+        if !$check {
+            return Err(cloud_fs::FsError::new(
+                cloud_fs::FsErrorKind::TestFailure,
+                format!("assertion failed: `{}` at {}:{}", stringify!($check), file!(), line!()),
+            ));
+        }
+    };
+    ($check:expr, $message:expr) => {
+        if !$check {
+            return Err(cloud_fs::FsError::new(
+                cloud_fs::FsErrorKind::TestFailure,
+                format!("assertion failed: `{}` at {}:{}: {}", stringify!($check), file!(), line!(), $message)
+            ));
+        }
+    };
+    ($check:expr, $($info:tt)*) => {
+        if !$check {
+            return Err(cloud_fs::FsError::new(
+                cloud_fs::FsErrorKind::TestFailure,
+                format!("assertion failed: `{}` at {}:{}: {}",
+                    stringify!($check), file!(), line!(), std::fmt::format(format_args!($($info)*)))
+            ));
+        }
+    };
+}
+
+// assertion failed: `(left == right)`
+//   left: ``
+//  right: ``
+macro_rules! test_assert_eq {
+    ($found:expr, $expected:expr) => {
+        if $found != $expected {
+            return Err(cloud_fs::FsError::new(
+                cloud_fs::FsErrorKind::TestFailure,
+                format!("assertion failed: `{} == {}` at {}:{}\n    found: `{:?}`\n expected: `{:?}`",
+                    stringify!($found), stringify!($expected), file!(), line!(), $found, $expected),
+            ));
+        }
+    };
+    ($found:expr, $expected:expr, $message:expr) => {
+        if $found != $expected {
+            return Err(cloud_fs::FsError::new(
+                cloud_fs::FsErrorKind::TestFailure,
+                format!("assertion failed: `{} == {}` at {}:{}: {}\n    found: `{:?}`\n expected: `{:?}`",
+                    stringify!($found), stringify!($expected), file!(), line!(), $message, $found, $expected),
+            ));
+        }
+    };
+    ($found:expr, $expected:expr, $($info:tt)*) => {
+        if $found != $expected {
+            return Err(cloud_fs::FsError::new(
+                cloud_fs::FsErrorKind::TestFailure,
+                format!("assertion failed: `{} == {}` at {}:{}: {}\n    found: `{:?}`\n expected: `{:?}`",
+                    stringify!($found), stringify!($expected), file!(), line!(), std::fmt::format(format_args!($($info)*)), $found, $expected),
+            ));
+        }
+    };
 }
 
 pub struct ContentIterator {

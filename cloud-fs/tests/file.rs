@@ -1,5 +1,6 @@
 extern crate cloud_fs;
 
+#[macro_use]
 mod runner;
 
 use std::path::Path;

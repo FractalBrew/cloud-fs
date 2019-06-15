@@ -2,8 +2,9 @@ extern crate cloud_fs;
 extern crate tempfile;
 extern crate tokio;
 
-pub mod read;
+#[macro_use]
 mod utils;
+pub mod read;
 pub mod write;
 
 use std::fs::create_dir_all;
@@ -52,7 +53,6 @@ pub fn cleanup(temp: TempDir) -> FsResult<()> {
     Ok(())
 }
 
-#[macro_export]
 macro_rules! make_test {
     ($pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         #[test]
@@ -92,7 +92,6 @@ macro_rules! make_test {
     };
 }
 
-#[macro_export]
 macro_rules! build_tests {
     ($name:expr, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         make_test!(read, test_list_files, $allow_incomplete, $setup, $cleanup);

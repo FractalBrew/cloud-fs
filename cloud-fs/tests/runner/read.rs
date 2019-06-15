@@ -1,16 +1,20 @@
+use std::iter::empty;
+
 use tokio::prelude::*;
 
 use super::utils::*;
+use super::*;
 
 use cloud_fs::*;
 
 fn compare_file(file: &FsFile, expected_path: &FsPath, expected_size: u64) -> FsResult<()> {
-    assert_eq(file.path(), expected_path, "Should have the expected path.")?;
-    assert_eq(
+    test_assert_eq!(file.path(), expected_path, "Should have the expected path.");
+    test_assert_eq!(
         file.size(),
         expected_size,
-        format!("Should have the expected size for {}", expected_path),
-    )?;
+        "Should have the expected size for {}",
+        expected_path,
+    );
     Ok(())
 }
 
@@ -24,11 +28,11 @@ pub fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
             .and_then(|s| s.collect())
             .and_then(move |mut results| {
                 results.sort();
-                assert_eq(
+                test_assert_eq!(
                     results.len(),
                     files.len(),
                     "Should have seen the right number of results.",
-                )?;
+                );
 
                 for _ in 0..files.len() {
                     let result = results.remove(0);
@@ -99,29 +103,32 @@ pub fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
             .and_then(move |stream| {
                 stream
                     .fold(
-                        (data, 0),
-                        |(mut data, mut count), bytes| -> FsResult<(I, u64)> {
-                            let mut iter = bytes.into_iter();
-                            loop {
-                                let found = iter.next();
-                                if found.is_none() {
-                                    break;
-                                }
-                                count += 1;
-
-                                let expected = data.next();
-                                assert_eq(
-                                    found,
-                                    expected,
-                                    format!("Should have seen the right data at {}.", count),
-                                )?;
+                        (data, 0 as u64),
+                        |(mut data, count), bytes| -> FsResult<(I, u64)> {
+                            let mut expected: Vec<u8> = Vec::with_capacity(bytes.len());
+                            for i in 0..bytes.len() as u64 {
+                                let byte = data.next();
+                                test_assert!(
+                                    byte.is_some(),
+                                    "Found an unexpected byte at index {}",
+                                    count + i
+                                );
+                                expected.push(byte.unwrap());
                             }
 
-                            Ok((data, count))
+                            test_assert_eq!(
+                                &bytes as &[u8],
+                                &expected as &[u8],
+                                "Should have seen the right data at {}.",
+                                count,
+                            );
+
+                            Ok((data, count + bytes.len() as u64))
                         },
                     )
-                    .and_then(|(mut data, _count)| {
-                        assert_eq(data.next(), None, "Should have read the entire file.")
+                    .and_then(|(mut data, _)| {
+                        test_assert!(data.next().is_none(), "Should have read the entire file.");
+                        Ok(())
                     })
             })
             .map(move |_| fs)
@@ -133,4 +140,6 @@ pub fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
         b"This is quite a short file.".iter().cloned(),
     )
     .and_then(|fs| test_stream(fs, "/largefile", ContentIterator::new(0, 100 * MB)))
+    .and_then(|fs| test_stream(fs, "/dir2/bar", empty()))
+    .and_then(|fs| test_stream(fs, "/dir2/daz", ContentIterator::new(72, 300)))
 }

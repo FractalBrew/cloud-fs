@@ -15,7 +15,7 @@ use crate::utils::{stream_from_future, MergedStreams};
 use crate::*;
 
 // How many bytes to attempt to read from a file at a time.
-const BUFFER_SIZE: usize = 10 * 1024 * 1024;
+const BUFFER_SIZE: usize = 20 * 1024 * 1024;
 
 struct FileLister {
     entries: Vec<DirEntry>,
