@@ -32,7 +32,7 @@ use tokio::prelude::*;
 use backends::connect;
 use backends::*;
 pub use futures::*;
-pub use types::{FsError, FsErrorType, FsFile, FsPath, FsResult, FsSettings};
+pub use types::{FsError, FsErrorKind, FsFile, FsPath, FsResult, FsSettings};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
@@ -46,15 +46,15 @@ trait FsImpl {
     /// See [Fs.get_file](struct.Fs.html#method.get_file).
     fn get_file(&self, path: FsPath) -> FileFuture;
 
-    /// Deletes the file at the given path.
-    ///
-    /// See [Fs.get_file](struct.Fs.html#method.delete_file).
-    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture;
-
     /// Gets a stream of data for the file at the given path.
     ///
     /// See [Fs.get_file](struct.Fs.html#method.get_file_stream).
     fn get_file_stream(&self, path: FsPath) -> DataStreamFuture;
+
+    /// Deletes the file at the given path.
+    ///
+    /// See [Fs.get_file](struct.Fs.html#method.delete_file).
+    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture;
 
     /// Writes a stram of data the the file at the given path.
     ///
@@ -72,22 +72,22 @@ impl Fs {
     fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
         if !path.is_absolute() {
             Err(FsError::new(
-                FsErrorType::InvalidPath,
+                FsErrorKind::InvalidPath,
                 "Requests must use an absolute path.",
             ))
         } else if should_be_dir && !path.is_directory() {
             Err(FsError::new(
-                FsErrorType::InvalidPath,
+                FsErrorKind::InvalidPath,
                 "This request requires the path to a directory.",
             ))
         } else if !should_be_dir && path.is_directory() {
             Err(FsError::new(
-                FsErrorType::InvalidPath,
+                FsErrorKind::InvalidPath,
                 "This request requires the path to a file.",
             ))
         } else if path.is_windows() {
             Err(FsError::new(
-                FsErrorType::InvalidPath,
+                FsErrorKind::InvalidPath,
                 "Paths should not include windows prefixes.",
             ))
         } else {
@@ -99,12 +99,12 @@ impl Fs {
     pub fn new(settings: FsSettings) -> ConnectFuture {
         if !settings.path.is_absolute() {
             return ConnectFuture::from_error(FsError::new(
-                FsErrorType::InvalidSettings,
+                FsErrorKind::InvalidSettings,
                 "Fs must be initialized with an absolute path.",
             ));
         } else if !settings.path.is_directory() {
             return ConnectFuture::from_error(FsError::new(
-                FsErrorType::InvalidSettings,
+                FsErrorKind::InvalidSettings,
                 "Fs must be initialized with a directory path.",
             ));
         }
@@ -145,18 +145,6 @@ impl Fs {
         self.backend.get().get_file(path)
     }
 
-    /// Deletes the file at the given path.
-    ///
-    /// This will not resolve to an error if the file already does not exist. It
-    /// will return an error if the attempt to delete the file failed.
-    pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
-        if let Err(e) = self.check_path(&path, false) {
-            return OperationCompleteFuture::from_error(e);
-        }
-
-        self.backend.get().delete_file(path)
-    }
-
     /// Gets a stream of data for the file at the given path.
     ///
     /// The data returned is not necessarily in any particular chunk size.
@@ -168,6 +156,18 @@ impl Fs {
         }
 
         self.backend.get().get_file_stream(path)
+    }
+
+    /// Deletes the file at the given path.
+    ///
+    /// This will not resolve to an error if the file already does not exist. It
+    /// will return an error if the attempt to delete the file failed.
+    pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
+        if let Err(e) = self.check_path(&path, false) {
+            return OperationCompleteFuture::from_error(e);
+        }
+
+        self.backend.get().delete_file(path)
     }
 
     /// Writes a stream of data the the file at the given path.

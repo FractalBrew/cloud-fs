@@ -12,7 +12,7 @@ pub fn assert_eq<T: Debug + Eq, S: AsRef<str>>(found: T, expected: T, message: S
         Ok(())
     } else {
         Err(FsError::new(
-            FsErrorType::TestFailure,
+            FsErrorKind::TestFailure,
             format!(
                 "assertion failed: {}\n    found: `{:?}`\n expected: `{:?}`",
                 message.as_ref(),

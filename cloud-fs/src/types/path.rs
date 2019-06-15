@@ -3,7 +3,7 @@ use std::cmp::{Ord, Ordering};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::types::{FsError, FsErrorType, FsResult};
+use crate::types::{FsError, FsErrorKind, FsResult};
 
 const PARENT_DIR: &str = "..";
 const CURRENT_DIR: &str = ".";
@@ -39,7 +39,7 @@ impl Prefix {
                 let (server, next) = FsPath::find_separator(path, 8, false);
                 if next == path.len() {
                     return Err(FsError::new(
-                        FsErrorType::ParseError,
+                        FsErrorKind::ParseError,
                         "Incorrect format for verbatim UNC path.",
                     ));
                 }
@@ -52,11 +52,11 @@ impl Prefix {
                 if let Some(d) = path.bytes().nth(4) {
                     return Ok(Some((Prefix::VerbatimDisk(d), 6)));
                 } else {
-                    return Err(FsError::new(FsErrorType::ParseError, "Unexpected failure."));
+                    return Err(FsError::new(FsErrorKind::ParseError, "Unexpected failure."));
                 }
             } else {
                 return Err(FsError::new(
-                    FsErrorType::ParseError,
+                    FsErrorKind::ParseError,
                     "Verbatim prefix did not match any supported form.",
                 ));
             }
@@ -198,7 +198,7 @@ impl FsPath {
             FsPath::new(string)
         } else {
             Err(FsError::new(
-                FsErrorType::ParseError,
+                FsErrorKind::ParseError,
                 "Path was not valid utf8.",
             ))
         }
@@ -318,7 +318,7 @@ impl FsPath {
                     } else {
                         if self.is_absolute() {
                             return Err(FsError::new(
-                                FsErrorType::ParseError,
+                                FsErrorKind::ParseError,
                                 "Cannot have remaining relative path parts in an absolute path.",
                             ));
                         }
@@ -343,12 +343,12 @@ impl FsPath {
     pub fn relative(&self, target: &FsPath) -> FsResult<FsPath> {
         if !self.is_absolute || !target.is_absolute {
             return Err(FsError::new(
-                FsErrorType::ParseError,
+                FsErrorKind::ParseError,
                 "Can only generate a relative path between two absolute paths.",
             ));
         }
         if self.prefix != target.prefix {
-            return Err(FsError::new(FsErrorType::ParseError, "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+            return Err(FsError::new(FsErrorKind::ParseError, "Can only generate a relative path between two absolute paths with the same Windows prefix."));
         }
 
         self.assert_is_normalized();

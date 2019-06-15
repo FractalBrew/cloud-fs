@@ -10,28 +10,28 @@ pub struct B2Backend {
 impl B2Backend {
     /// Creates a new instance of the B2 backend.
     pub fn connect(_settings: FsSettings) -> ConnectFuture {
-        unimplemented!();
+        ConnectFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "B2Backend::connect is not yet implemented."))
     }
 }
 
 impl FsImpl for B2Backend {
     fn list_files(&self, _path: FsPath) -> FileListFuture {
-        unimplemented!();
+        FileListFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "B2Backend::list_files is not yet implemented."))
     }
 
     fn get_file(&self, _path: FsPath) -> FileFuture {
-        unimplemented!();
-    }
-
-    fn delete_file(&self, _path: FsPath) -> OperationCompleteFuture {
-        unimplemented!();
+        FileFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "B2Backend::get_file is not yet implemented."))
     }
 
     fn get_file_stream(&self, _path: FsPath) -> DataStreamFuture {
-        unimplemented!();
+        DataStreamFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "B2Backend::get_file_stream is not yet implemented."))
+    }
+
+    fn delete_file(&self, _path: FsPath) -> OperationCompleteFuture {
+        OperationCompleteFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "B2Backend::delete_file is not yet implemented."))
     }
 
     fn write_from_stream(&self, _path: FsPath, _stream: DataStream) -> OperationCompleteFuture {
-        unimplemented!();
+        OperationCompleteFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "B2Backend::write_from_stream is not yet implemented."))
     }
 }

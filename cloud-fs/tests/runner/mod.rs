@@ -2,20 +2,18 @@ extern crate cloud_fs;
 extern crate tempfile;
 extern crate tokio;
 
-mod read;
+pub mod read;
 mod utils;
-mod write;
+pub mod write;
 
 use std::fs::create_dir_all;
 use std::iter::empty;
 use std::path::PathBuf;
 
 use tempfile::{tempdir, TempDir};
-use tokio::prelude::*;
 
 use utils::*;
 
-use cloud_fs::utils::run_future;
 use cloud_fs::*;
 
 pub fn prepare_test() -> FsResult<TempDir> {
@@ -48,23 +46,55 @@ pub fn prepare_test() -> FsResult<TempDir> {
     Ok(temp)
 }
 
-pub fn run<F>(future: F)
-where
-    F: Future<Item = Fs, Error = FsError> + Sized + Send + Sync + 'static,
-{
-    if let Err(e) = run_future(future) {
-        panic!("{}", e);
-    }
-}
-
-pub fn run_from_settings(settings: FsSettings) {
-    run(Fs::new(settings)
-        .and_then(read::run_tests)
-        .and_then(write::run_tests));
-}
-
 pub fn cleanup(temp: TempDir) -> FsResult<()> {
     temp.close()?;
 
     Ok(())
+}
+
+#[macro_export]
+macro_rules! make_test {
+    ($pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
+        #[test]
+        fn $name() -> FsResult<()> {
+            let temp = crate::runner::prepare_test()?;
+            let (fs_future, context) = $setup(temp.path())?;
+            let future = fs_future
+                .and_then(crate::runner::$pkg::$name)
+                .then(move |r| {
+                    $cleanup(context);
+                    r
+                });
+
+            match cloud_fs::utils::run_future(future) {
+                Ok(Err(e)) => {
+                    if e.kind() == cloud_fs::FsErrorKind::NotImplemented {
+                        if $allow_incomplete {
+                            eprintln!("Test attempts to use unimplemented feature: {}", e);
+                        } else {
+                            panic!("Test attempts to use unimplemented feature: {}", e);
+                        }
+                    } else {
+                        panic!("{}", e);
+                    }
+                },
+                Err(e) => panic!("{}::{} never completed: {}", stringify!($pkg), stringify!($name), e),
+                _ => (),
+            }
+
+            crate::runner::cleanup(temp)
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! build_tests {
+    ($name:expr, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
+        make_test!(read, test_list_files, $allow_incomplete, $setup, $cleanup);
+        make_test!(read, test_get_file, $allow_incomplete, $setup, $cleanup);
+        make_test!(read, test_get_file_stream, $allow_incomplete, $setup, $cleanup);
+
+        make_test!(write, test_delete_file, $allow_incomplete, $setup, $cleanup);
+        make_test!(write, test_write_from_stream, $allow_incomplete, $setup, $cleanup);
+    }
 }

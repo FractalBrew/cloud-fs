@@ -4,13 +4,23 @@ use super::utils::*;
 
 use cloud_fs::*;
 
-fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+fn compare_file(file: &FsFile, expected_path: &FsPath, expected_size: u64) -> FsResult<()> {
+    assert_eq(file.path(), expected_path, "Should have the expected path.")?;
+    assert_eq(
+        file.size(),
+        expected_size,
+        format!("Should have the expected size for {}", expected_path),
+    )?;
+    Ok(())
+}
+
+pub fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
     fn test_list(
         fs: Fs,
-        path: FsPath,
+        path: &str,
         mut files: Vec<(&'static str, u64)>,
     ) -> impl Future<Item = Fs, Error = FsError> {
-        fs.list_files(path)
+        fs.list_files(FsPath::new(path).unwrap())
             .and_then(|s| s.collect())
             .and_then(move |mut results| {
                 results.sort();
@@ -23,26 +33,19 @@ fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
                 for _ in 0..files.len() {
                     let result = results.remove(0);
                     let (pathstr, size) = files.remove(0);
-                    let path = FsPath::new(pathstr)?;
-
-                    assert_eq(result.path(), &path, "Should have the expected name.")?;
-                    assert_eq(
-                        result.size(),
-                        size,
-                        format!("Should have the expected size for {}", path),
-                    )?;
+                    compare_file(&result, &FsPath::new(pathstr)?, size)?;
                 }
-                Ok(())
+                Ok(fs)
             })
-            .map(|_| fs)
     }
 
     test_list(
         fs,
-        FsPath::new("/").unwrap(),
+        "/",
         vec![
             ("/largefile", 100 * MB),
             ("/mediumfile", 5 * MB),
+            ("/smallfile.txt", 27),
             ("/dir2/0foo", 0),
             ("/dir2/1bar", 0),
             ("/dir2/5diz", 0),
@@ -56,7 +59,7 @@ fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
     .and_then(|fs| {
         test_list(
             fs,
-            FsPath::new("/dir2/").unwrap(),
+            "/dir2/",
             vec![
                 ("/dir2/0foo", 0),
                 ("/dir2/1bar", 0),
@@ -71,25 +74,52 @@ fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
     })
 }
 
-fn test_get_file(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
-    let path = FsPath::new("/largefile").unwrap();
-    fs.get_file(path).and_then(move |file| {
-        assert_eq(
-            file.path().to_string(),
-            String::from("/largefile"),
-            "Should have seen the right path.",
-        )?;
-        assert_eq(file.size(), 100 * MB, "Should have seen the right size.")?;
-        Ok(fs)
-    })
+pub fn test_get_file(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+    fn test_get(fs: Fs, path: &str, size: u64) -> impl Future<Item = Fs, Error = FsError> {
+        let expected_path = FsPath::new(path).unwrap();
+        fs.get_file(FsPath::new(path).unwrap())
+            .and_then(move |result| {
+                compare_file(&result, &expected_path, size)?;
+                Ok(fs)
+            })
+    }
+
+    test_get(fs, "/largefile", 100 * MB)
 }
 
-fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
-    future::finished(fs)
-}
+pub fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+    fn test_stream<I>(
+        fs: Fs,
+        path: &str,
+        data: I,
+    ) -> impl Future<Item = Fs, Error = FsError>
+    where
+        I: Iterator<Item = u8>,
+    {
+        fs.get_file_stream(FsPath::new(path).unwrap())
+            .and_then(move |stream| {
+                stream.fold((data, 0), |(mut data, mut count), bytes| -> FsResult<(I, u64)> {
+                    let mut iter = bytes.into_iter();
+                    loop {
+                        let found = iter.next();
+                        if found.is_none() {
+                            break;
+                        }
+                        count += 1;
 
-pub fn run_tests(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
-    test_list_files(fs)
-        .and_then(test_get_file)
-        .and_then(test_get_file_stream)
+                        let expected = data.next();
+                        assert_eq(found, expected, format!("Should have seen the right data at {}.", count))?;
+                    }
+
+                    Ok((data, count))
+                })
+                .and_then(|(mut data, _count)| {
+                    assert_eq(data.next(), None, "Should have read the entire file.")
+                })
+            })
+            .map(move |_| fs)
+
+    }
+
+    test_stream(fs, "/largefile", ContentIterator::new(0, 100 * MB))
 }

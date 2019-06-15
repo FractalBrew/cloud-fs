@@ -13,8 +13,8 @@ pub use path::FsPath;
 pub type Data = Bytes;
 
 /// The type of an [`FsError`](struct.FsError.html).
-#[derive(Clone, Debug)]
-pub enum FsErrorType {
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum FsErrorKind {
     /// An error that occuring while parsing or manipulating a
     /// [`FsPath`](struct.FsPath.html].
     ParseError,
@@ -29,6 +29,8 @@ pub enum FsErrorType {
     InvalidSettings,
     /// An error used internally to mark a test failure.
     TestFailure,
+    /// An error indicating that the requested function is not yet implemented.
+    NotImplemented,
     /// An unknown error type, usually a marker that this `FsError` was
     /// generated from a different error type.
     Other,
@@ -37,15 +39,15 @@ pub enum FsErrorType {
 /// The main error type used throughout this crate.
 #[derive(Clone, Debug)]
 pub struct FsError {
-    error_type: FsErrorType,
+    kind: FsErrorKind,
     description: String,
 }
 
 impl FsError {
     /// Creates a new `FsError` instance
-    pub fn new<S: AsRef<str>>(error_type: FsErrorType, description: S) -> FsError {
+    pub fn new<S: AsRef<str>>(kind: FsErrorKind, description: S) -> FsError {
         FsError {
-            error_type,
+            kind,
             description: description.as_ref().to_owned(),
         }
     }
@@ -55,7 +57,12 @@ impl FsError {
     where
         E: Error + fmt::Display,
     {
-        Self::new(FsErrorType::Other, format!("{}", error))
+        Self::new(FsErrorKind::Other, format!("{}", error))
+    }
+
+    /// Gets the [`FsErrorKind`](enum.FsErrorKind.html) of this `FsError`.
+    pub fn kind(&self) -> FsErrorKind {
+        self.kind
     }
 }
 

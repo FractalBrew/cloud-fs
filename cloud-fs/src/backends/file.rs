@@ -150,7 +150,7 @@ impl FileBackend {
         let mut relative = base.relative(&fspath)?;
         if relative.is_above_base() {
             return Err(FsError::new(
-                FsErrorType::InvalidPath,
+                FsErrorKind::InvalidPath,
                 "Received an invalid path from the filesystem.",
             ));
         }
@@ -199,7 +199,7 @@ impl FsImpl for FileBackend {
                             FileBackend::get_fsfile(&base, target, m)
                         } else {
                             Err(FsError::new(
-                                FsErrorType::NotFound,
+                                FsErrorKind::NotFound,
                                 format!("{} was not found.", path),
                             ))
                         }
@@ -207,7 +207,7 @@ impl FsImpl for FileBackend {
                     Err(e) => {
                         if e.kind() == ErrorKind::NotFound {
                             Err(FsError::new(
-                                FsErrorType::NotFound,
+                                FsErrorKind::NotFound,
                                 format!("{} was not found.", path),
                             ))
                         } else {
@@ -220,18 +220,18 @@ impl FsImpl for FileBackend {
         }
     }
 
-    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
-        let _target = self.get_api_target(&path);
-        unimplemented!();
-    }
-
     fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
         let _target = self.get_api_target(&path);
-        unimplemented!();
+        DataStreamFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "FileBackend::get_file_stream is not yet implemented."))
+    }
+
+    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
+        let _target = self.get_api_target(&path);
+        OperationCompleteFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "FileBackend::delete_file is not yet implemented."))
     }
 
     fn write_from_stream(&self, path: FsPath, _stream: DataStream) -> OperationCompleteFuture {
         let _target = self.get_api_target(&path);
-        unimplemented!();
+        OperationCompleteFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "FileBackend::write_from_stream is not yet implemented."))
     }
 }
