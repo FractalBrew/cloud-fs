@@ -1,5 +1,10 @@
 //! A useful set of utilities for working with futures and streams.
+//!
+//! You probably won't need to use these yourself but they are used internally
+//! and there is no reason to keep them private.
+use std::sync::mpsc;
 use tokio::prelude::*;
+use tokio::sync::oneshot;
 
 /// Holds an instance of `Stream`. This can be useful when you want to simplify
 /// the types you're working with.
@@ -99,8 +104,8 @@ where
     }
 }
 
-/// Merges a set of streams into a single stream that returns results in any
-/// order.
+/// Merges a set of streams into a single stream that returns results whenever
+/// they arrive, not necessarily in the order the streams were added.
 ///
 /// Implements Stream, polling it will poll all the owned streams returning an
 /// item if found. One an owned stream returns None that stream will be dropped.
@@ -183,4 +188,31 @@ where
 
         Ok(Async::NotReady)
     }
+}
+
+/// Runs a future on the existing tokio runtime.
+pub fn spawn_future<F, I, E>(
+    future: F,
+) -> impl Future<Item = Result<I, E>, Error = oneshot::error::RecvError>
+where
+    I: Sized + Send + Sync + 'static,
+    E: Sized + Send + Sync + 'static,
+    F: Future<Item = I, Error = E> + Sized + Send + Sync + 'static,
+{
+    let (sender, receiver) = oneshot::channel::<Result<I, E>>();
+    tokio::executor::spawn(future.then(move |r| sender.send(r)).map_err(|_| ()));
+
+    receiver
+}
+
+/// Runs a future to completion on a new tokio runtime and returns the result.
+pub fn run_future<F, I, E>(future: F) -> Result<Result<I, E>, mpsc::TryRecvError>
+where
+    I: Sized + Send + Sync + 'static,
+    E: Sized + Send + Sync + 'static,
+    F: Future<Item = I, Error = E> + Sized + Send + Sync + 'static,
+{
+    let (sender, receiver) = mpsc::channel::<Result<I, E>>();
+    tokio::run(future.then(move |r| sender.send(r)).map_err(|_| ()));
+    receiver.try_recv()
 }

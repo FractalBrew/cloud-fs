@@ -1,7 +1,7 @@
 extern crate cloud_fs;
 
-mod shared;
-use shared::*;
+mod runner;
+use runner::*;
 
 use cloud_fs::backends::Backend;
 use cloud_fs::{FsPath, FsResult, FsSettings};
