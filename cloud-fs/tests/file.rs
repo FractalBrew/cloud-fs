@@ -7,7 +7,7 @@ use std::path::Path;
 use tokio::prelude::Future;
 
 use cloud_fs::backends::Backend;
-use cloud_fs::{FsError, Fs, FsPath, FsResult, FsSettings};
+use cloud_fs::{Fs, FsError, FsPath, FsResult, FsSettings};
 
 fn build_fs(path: &Path) -> FsResult<(impl Future<Item = Fs, Error = FsError>, ())> {
     let mut base = FsPath::new(format!("{}/", path.display()))?;
@@ -17,7 +17,6 @@ fn build_fs(path: &Path) -> FsResult<(impl Future<Item = Fs, Error = FsError>, (
     Ok((Fs::new(FsSettings::new(Backend::File, base)), ()))
 }
 
-fn cleanup(_: ()) {
-}
+fn cleanup(_: ()) {}
 
 build_tests!("file", true, build_fs, cleanup);

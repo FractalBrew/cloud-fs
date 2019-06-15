@@ -5,6 +5,7 @@ use std::fs::Metadata;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use bytes::BytesMut;
 use tokio::fs::*;
 use tokio_fs::DirEntry;
 
@@ -12,6 +13,9 @@ use super::BackendImplementation;
 use crate::types::{FsFile, FsPath};
 use crate::utils::{stream_from_future, MergedStreams};
 use crate::*;
+
+// How many bytes to attempt to read from a file at a time.
+const BUFFER_SIZE: usize = 10 * 1024 * 1024;
 
 struct FileLister {
     entries: Vec<DirEntry>,
@@ -119,6 +123,34 @@ impl Stream for FileLister {
     }
 }
 
+struct FileStream {
+    file: File,
+}
+
+impl FileStream {
+    fn build(file: File) -> DataStream {
+        DataStream::from_stream(FileStream { file })
+    }
+}
+
+impl Stream for FileStream {
+    type Item = Bytes;
+    type Error = FsError;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
+        match self.file.read_buf(&mut buffer) {
+            Ok(Async::Ready(0)) => Ok(Async::Ready(None)),
+            Ok(Async::Ready(size)) => {
+                buffer.split_off(size);
+                Ok(Async::Ready(Some(buffer.freeze())))
+            }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => Err(FsError::from_error(e)),
+        }
+    }
+}
+
 /// The backend implementation for local file storage.
 #[derive(Debug)]
 pub struct FileBackend {
@@ -221,17 +253,29 @@ impl FsImpl for FileBackend {
     }
 
     fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
-        let _target = self.get_api_target(&path);
-        DataStreamFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "FileBackend::get_file_stream is not yet implemented."))
+        match self.get_api_target(&path) {
+            Ok(target) => DataStreamFuture::from_future(
+                File::open(target)
+                    .map_err(FsError::from_error)
+                    .map(FileStream::build),
+            ),
+            Err(error) => DataStreamFuture::from_error(error),
+        }
     }
 
     fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
         let _target = self.get_api_target(&path);
-        OperationCompleteFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "FileBackend::delete_file is not yet implemented."))
+        OperationCompleteFuture::from_error(FsError::new(
+            FsErrorKind::NotImplemented,
+            "FileBackend::delete_file is not yet implemented.",
+        ))
     }
 
     fn write_from_stream(&self, path: FsPath, _stream: DataStream) -> OperationCompleteFuture {
         let _target = self.get_api_target(&path);
-        OperationCompleteFuture::from_error(FsError::new(FsErrorKind::NotImplemented, "FileBackend::write_from_stream is not yet implemented."))
+        OperationCompleteFuture::from_error(FsError::new(
+            FsErrorKind::NotImplemented,
+            "FileBackend::write_from_stream is not yet implemented.",
+        ))
     }
 }

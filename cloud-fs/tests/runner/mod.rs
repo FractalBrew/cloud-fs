@@ -39,7 +39,7 @@ pub fn prepare_test() -> FsResult<TempDir> {
     write_file(&dir, "0foo", empty())?;
     write_file(&dir, "5diz", empty())?;
     write_file(&dir, "1bar", empty())?;
-    write_file(&dir, "daz", empty())?;
+    write_file(&dir, "daz", ContentIterator::new(72, 300))?;
     write_file(&dir, "hop", empty())?;
     write_file(&dir, "yu", empty())?;
 
@@ -77,14 +77,19 @@ macro_rules! make_test {
                     } else {
                         panic!("{}", e);
                     }
-                },
-                Err(e) => panic!("{}::{} never completed: {}", stringify!($pkg), stringify!($name), e),
+                }
+                Err(e) => panic!(
+                    "{}::{} never completed: {}",
+                    stringify!($pkg),
+                    stringify!($name),
+                    e
+                ),
                 _ => (),
             }
 
             crate::runner::cleanup(temp)
         }
-    }
+    };
 }
 
 #[macro_export]
@@ -92,9 +97,21 @@ macro_rules! build_tests {
     ($name:expr, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         make_test!(read, test_list_files, $allow_incomplete, $setup, $cleanup);
         make_test!(read, test_get_file, $allow_incomplete, $setup, $cleanup);
-        make_test!(read, test_get_file_stream, $allow_incomplete, $setup, $cleanup);
+        make_test!(
+            read,
+            test_get_file_stream,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
 
         make_test!(write, test_delete_file, $allow_incomplete, $setup, $cleanup);
-        make_test!(write, test_write_from_stream, $allow_incomplete, $setup, $cleanup);
-    }
+        make_test!(
+            write,
+            test_write_from_stream,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
+    };
 }

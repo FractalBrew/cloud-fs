@@ -50,7 +50,7 @@ pub fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
             ("/dir2/1bar", 0),
             ("/dir2/5diz", 0),
             ("/dir2/bar", 0),
-            ("/dir2/daz", 0),
+            ("/dir2/daz", 300),
             ("/dir2/foo", 0),
             ("/dir2/hop", 0),
             ("/dir2/yu", 0),
@@ -65,7 +65,7 @@ pub fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
                 ("/dir2/1bar", 0),
                 ("/dir2/5diz", 0),
                 ("/dir2/bar", 0),
-                ("/dir2/daz", 0),
+                ("/dir2/daz", 300),
                 ("/dir2/foo", 0),
                 ("/dir2/hop", 0),
                 ("/dir2/yu", 0),
@@ -85,41 +85,52 @@ pub fn test_get_file(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
     }
 
     test_get(fs, "/largefile", 100 * MB)
+        .and_then(|fs| test_get(fs, "/smallfile.txt", 27))
+        .and_then(|fs| test_get(fs, "/dir2/0foo", 0))
+        .and_then(|fs| test_get(fs, "/dir2/daz", 300))
 }
 
 pub fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
-    fn test_stream<I>(
-        fs: Fs,
-        path: &str,
-        data: I,
-    ) -> impl Future<Item = Fs, Error = FsError>
+    fn test_stream<I>(fs: Fs, path: &str, data: I) -> impl Future<Item = Fs, Error = FsError>
     where
         I: Iterator<Item = u8>,
     {
         fs.get_file_stream(FsPath::new(path).unwrap())
             .and_then(move |stream| {
-                stream.fold((data, 0), |(mut data, mut count), bytes| -> FsResult<(I, u64)> {
-                    let mut iter = bytes.into_iter();
-                    loop {
-                        let found = iter.next();
-                        if found.is_none() {
-                            break;
-                        }
-                        count += 1;
+                stream
+                    .fold(
+                        (data, 0),
+                        |(mut data, mut count), bytes| -> FsResult<(I, u64)> {
+                            let mut iter = bytes.into_iter();
+                            loop {
+                                let found = iter.next();
+                                if found.is_none() {
+                                    break;
+                                }
+                                count += 1;
 
-                        let expected = data.next();
-                        assert_eq(found, expected, format!("Should have seen the right data at {}.", count))?;
-                    }
+                                let expected = data.next();
+                                assert_eq(
+                                    found,
+                                    expected,
+                                    format!("Should have seen the right data at {}.", count),
+                                )?;
+                            }
 
-                    Ok((data, count))
-                })
-                .and_then(|(mut data, _count)| {
-                    assert_eq(data.next(), None, "Should have read the entire file.")
-                })
+                            Ok((data, count))
+                        },
+                    )
+                    .and_then(|(mut data, _count)| {
+                        assert_eq(data.next(), None, "Should have read the entire file.")
+                    })
             })
             .map(move |_| fs)
-
     }
 
-    test_stream(fs, "/largefile", ContentIterator::new(0, 100 * MB))
+    test_stream(
+        fs,
+        "/smallfile.txt",
+        b"This is quite a short file.".iter().cloned(),
+    )
+    .and_then(|fs| test_stream(fs, "/largefile", ContentIterator::new(0, 100 * MB)))
 }
