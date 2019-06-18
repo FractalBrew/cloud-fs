@@ -1,3 +1,5 @@
+#![cfg(feature = "file")]
+
 extern crate cloud_fs;
 
 #[macro_use]

@@ -2,12 +2,13 @@
 extern crate tokio_fs;
 
 use std::fs::Metadata;
-use std::io::ErrorKind;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use bytes::BytesMut;
 use tokio::fs::*;
 use tokio_fs::DirEntry;
+use tokio::prelude::future::{err, Either};
 
 use super::BackendImplementation;
 use crate::types::{FsFile, FsPath};
@@ -17,18 +18,66 @@ use crate::*;
 // How many bytes to attempt to read from a file at a time.
 const BUFFER_SIZE: usize = 20 * 1024 * 1024;
 
+#[derive(Clone, Debug)]
+struct FileSpace {
+    base: FsPath,
+}
+
+impl FileSpace {
+    fn get_std_path(&self, path: &FsPath) -> FsResult<PathBuf> {
+        if !path.is_absolute() {
+            return Err(FsError::new(FsErrorKind::ParseError, "Target path is expected to be absolute."));
+        }
+
+        let relative = FsPath::new("/")?.relative(path)?;
+        let target = self.base.join(&relative)?;
+
+        Ok(target.as_std_path())
+    }
+
+    fn get_fs_path(&self, path: &Path) -> FsResult<FsPath> {
+        if !path.is_absolute() {
+            return Err(FsError::new(FsErrorKind::ParseError, "Target path is expected to be absolute."));
+        }
+
+        let target = FsPath::from_std_path(path)?;
+        let relative = self.base.relative(&target)?;
+
+        FsPath::new("/")?.join(&relative)
+    }
+
+    fn get_fserror(&self, error: io::Error, path: &Path) -> FsError {
+        match self.get_fs_path(path) {
+            Ok(target) => match error.kind() {
+                io::ErrorKind::NotFound => FsError::new(FsErrorKind::NotFound, format!("{} was not found.", target)),
+                _ => FsError::new(FsErrorKind::Other, format!("Failed to access {}.", target)),
+            },
+            Err(e) => e,
+        }
+    }
+
+    fn get_fsfile(&self, path: &Path, metadata: Metadata) -> FsResult<FsFile> {
+        Ok(FsFile {
+            path: self.get_fs_path(path)?,
+            size: metadata.len(),
+        })
+    }
+}
+
 struct FileLister {
     entries: Vec<DirEntry>,
     stream: MergedStreams<DirEntry, FsError>,
     stream_is_done: bool,
+    space: FileSpace,
 }
 
 impl FileLister {
-    fn list(path: PathBuf) -> FileLister {
+    fn list(space: FileSpace, path: PathBuf) -> FileLister {
         let mut lister = FileLister {
             entries: Vec::new(),
             stream: MergedStreams::new(),
             stream_is_done: false,
+            space,
         };
 
         lister.add_directory(path);
@@ -36,8 +85,10 @@ impl FileLister {
     }
 
     fn add_directory(&mut self, path: PathBuf) {
+        let space = self.space.clone();
+        let error_path = path.clone();
         self.stream
-            .push(stream_from_future(read_dir(path)).map_err(FsError::from_error));
+            .push(stream_from_future(read_dir(path)).map_err(move |e| space.get_fserror(e, &error_path)));
         self.stream_is_done = false;
     }
 
@@ -45,7 +96,7 @@ impl FileLister {
         self.entries.push(entry);
     }
 
-    fn poll_entries(&mut self) -> FsResult<Option<(DirEntry, Metadata)>> {
+    fn poll_entries(&mut self) -> FsResult<Option<FsFile>> {
         if self.entries.is_empty() {
             return Ok(None);
         }
@@ -59,13 +110,14 @@ impl FileLister {
                     if metadata.is_dir() {
                         self.add_directory(entry.path().to_owned());
                     } else if metadata.is_file() {
-                        return Ok(Some((entry, metadata)));
+                        let file = self.space.get_fsfile(&entry.path(), metadata)?;
+                        return Ok(Some(file));
                     }
                 }
                 Ok(Async::NotReady) => i += 1,
                 Err(error) => {
-                    self.entries.remove(i);
-                    return Err(FsError::from_error(error));
+                    let entry = self.entries.remove(i);
+                    return Err(self.space.get_fserror(error, &entry.path()));
                 }
             }
         }
@@ -101,7 +153,7 @@ impl FileLister {
 }
 
 impl Stream for FileLister {
-    type Item = (DirEntry, Metadata);
+    type Item = FsFile;
     type Error = FsError;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -124,12 +176,14 @@ impl Stream for FileLister {
 }
 
 struct FileStream {
+    path: PathBuf,
+    space: FileSpace,
     file: File,
 }
 
 impl FileStream {
-    fn build(file: File) -> DataStream {
-        DataStream::from_stream(FileStream { file })
+    fn build(path: &Path, space: FileSpace, file: File) -> DataStream {
+        DataStream::from_stream(FileStream { path: path.to_owned(), space, file })
     }
 }
 
@@ -146,7 +200,7 @@ impl Stream for FileStream {
                 Ok(Async::Ready(Some(buffer.freeze())))
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(e) => Err(FsError::from_error(e)),
+            Err(e) => Err(self.space.get_fserror(e, &self.path)),
         }
     }
 }
@@ -154,6 +208,7 @@ impl Stream for FileStream {
 /// The backend implementation for local file storage.
 #[derive(Debug)]
 pub struct FileBackend {
+    space: FileSpace,
     settings: FsSettings,
 }
 
@@ -162,73 +217,34 @@ impl FileBackend {
     pub fn connect(settings: FsSettings) -> ConnectFuture {
         ConnectFuture::from_item(Fs {
             backend: BackendImplementation::File(FileBackend {
+                space: FileSpace {
+                    base: settings.path.clone(),
+                },
                 settings: settings.to_owned(),
             }),
         })
-    }
-
-    fn fs_path_into_real_path(base: &FsPath, path: &FsPath) -> FsResult<PathBuf> {
-        // We know that the path is absolute and not windows-like here.
-        let mut relative = path.clone();
-        relative.is_absolute = false;
-        let target = base.join(&relative)?;
-
-        Ok(target.as_std_path())
-    }
-
-    fn real_path_into_fs_path(base: &FsPath, path: &Path) -> FsResult<FsPath> {
-        let fspath = FsPath::from_std_path(path)?;
-
-        let mut relative = base.relative(&fspath)?;
-        if relative.is_above_base() {
-            return Err(FsError::new(
-                FsErrorKind::InvalidPath,
-                "Received an invalid path from the filesystem.",
-            ));
-        }
-
-        relative.is_absolute = true;
-        Ok(relative)
-    }
-
-    fn get_fsfile(base: &FsPath, path: PathBuf, metadata: Metadata) -> FsResult<FsFile> {
-        Ok(FsFile {
-            path: FileBackend::real_path_into_fs_path(base, &path)?,
-            size: metadata.len(),
-        })
-    }
-
-    fn get_api_target(&self, path: &FsPath) -> FsResult<PathBuf> {
-        FileBackend::fs_path_into_real_path(&self.settings.path, path)
     }
 }
 
 impl FsImpl for FileBackend {
     fn list_files(&self, path: FsPath) -> FileListFuture {
-        match self.get_api_target(&path) {
+        match self.space.get_std_path(&path) {
             Ok(target) => {
-                let base = self.settings.path.clone();
-
-                let file_list = FileLister::list(target).then(move |result| {
-                    result.and_then(|(entry, metadata)| {
-                        FileBackend::get_fsfile(&base, entry.path(), metadata)
-                    })
-                });
-                FileListFuture::from_item(FileListStream::from_stream(file_list))
+                FileListFuture::from_item(FileListStream::from_stream(FileLister::list(self.space.clone(), target)))
             }
             Err(error) => FileListFuture::from_error(error),
         }
     }
 
     fn get_file(&self, path: FsPath) -> FileFuture {
-        match self.get_api_target(&path) {
+        match self.space.get_std_path(&path) {
             Ok(target) => {
-                let base = self.settings.path.clone();
+                let space = self.space.clone();
 
-                FileFuture::from_future(metadata(target.clone()).then(move |r| match r {
+                FileFuture::from_future(symlink_metadata(target.clone()).then(move |r| match r {
                     Ok(m) => {
                         if m.is_file() {
-                            FileBackend::get_fsfile(&base, target, m)
+                            space.get_fsfile(&target, m)
                         } else {
                             Err(FsError::new(
                                 FsErrorKind::NotFound,
@@ -237,14 +253,7 @@ impl FsImpl for FileBackend {
                         }
                     }
                     Err(e) => {
-                        if e.kind() == ErrorKind::NotFound {
-                            Err(FsError::new(
-                                FsErrorKind::NotFound,
-                                format!("{} was not found.", path),
-                            ))
-                        } else {
-                            Err(FsError::from_error(e))
-                        }
+                        Err(space.get_fserror(e, &target))
                     }
                 }))
             }
@@ -253,26 +262,41 @@ impl FsImpl for FileBackend {
     }
 
     fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
-        match self.get_api_target(&path) {
-            Ok(target) => DataStreamFuture::from_future(
-                File::open(target)
-                    .map_err(FsError::from_error)
-                    .map(FileStream::build),
-            ),
+        match self.space.get_std_path(&path) {
+            Ok(target) => {
+                let space = self.space.clone();
+                let build_space = self.space.clone();
+                let build_target = target.clone();
+                let meta_target = target.clone();
+                DataStreamFuture::from_future(symlink_metadata(target)
+                    .then(move |r| {
+                        match r {
+                            Ok(m) => {
+                                if m.is_file() {
+                                    let error_target = meta_target.clone();
+                                    Either::A(File::open(meta_target)
+                                        .map_err(move |e| space.get_fserror(e, &error_target)))
+                                } else {
+                                    Either::B(err(FsError::new(FsErrorKind::NotFound, format!("{} was not found.", path))))
+                                }
+                            },
+                            Err(e) => Either::B(err(space.get_fserror(e, &meta_target))),
+                        }
+                    })
+                    .map(move |f| FileStream::build(&build_target, build_space, f)))
+            },
             Err(error) => DataStreamFuture::from_error(error),
         }
     }
 
-    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
-        let _target = self.get_api_target(&path);
+    fn delete_file(&self, _path: FsPath) -> OperationCompleteFuture {
         OperationCompleteFuture::from_error(FsError::new(
             FsErrorKind::NotImplemented,
             "FileBackend::delete_file is not yet implemented.",
         ))
     }
 
-    fn write_from_stream(&self, path: FsPath, _stream: DataStream) -> OperationCompleteFuture {
-        let _target = self.get_api_target(&path);
+    fn write_from_stream(&self, _path: FsPath, _stream: DataStream) -> OperationCompleteFuture {
         OperationCompleteFuture::from_error(FsError::new(
             FsErrorKind::NotImplemented,
             "FileBackend::write_from_stream is not yet implemented.",

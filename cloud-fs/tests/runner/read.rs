@@ -18,7 +18,7 @@ fn compare_file(file: &FsFile, expected_path: &FsPath, expected_size: u64) -> Fs
     Ok(())
 }
 
-pub fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+pub fn test_list_files(fs: Fs, _local_path: PathBuf) -> impl Future<Item = Fs, Error = FsError> {
     fn test_list(
         fs: Fs,
         path: &str,
@@ -78,7 +78,7 @@ pub fn test_list_files(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
     })
 }
 
-pub fn test_get_file(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+pub fn test_get_file(fs: Fs, _local_path: PathBuf) -> impl Future<Item = Fs, Error = FsError> {
     fn test_get(fs: Fs, path: &str, size: u64) -> impl Future<Item = Fs, Error = FsError> {
         let expected_path = FsPath::new(path).unwrap();
         fs.get_file(FsPath::new(path).unwrap())
@@ -88,13 +88,27 @@ pub fn test_get_file(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
             })
     }
 
+    fn test_fail(fs: Fs, path: &str) -> impl Future<Item = Fs, Error = FsError> {
+        fs.get_file(FsPath::new(path).unwrap())
+            .then(move |result| {
+                test_assert!(result.is_err());
+                if let Err(e) = result {
+                    test_assert_eq!(e.kind(), FsErrorKind::NotFound);
+                }
+
+                Ok(fs)
+            })
+    }
+
     test_get(fs, "/largefile", 100 * MB)
         .and_then(|fs| test_get(fs, "/smallfile.txt", 27))
         .and_then(|fs| test_get(fs, "/dir2/0foo", 0))
         .and_then(|fs| test_get(fs, "/dir2/daz", 300))
+        .and_then(|fs| test_fail(fs, "/dir2"))
+        .and_then(|fs| test_fail(fs, "/daz"))
 }
 
-pub fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
+pub fn test_get_file_stream(fs: Fs, _local_path: PathBuf) -> impl Future<Item = Fs, Error = FsError> {
     fn test_stream<I>(fs: Fs, path: &str, data: I) -> impl Future<Item = Fs, Error = FsError>
     where
         I: Iterator<Item = u8>,
@@ -134,6 +148,18 @@ pub fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
             .map(move |_| fs)
     }
 
+    fn test_fail(fs: Fs, path: &str) -> impl Future<Item = Fs, Error = FsError> {
+        fs.get_file_stream(FsPath::new(path).unwrap())
+            .then(move |result| {
+                test_assert!(result.is_err());
+                if let Err(e) = result {
+                    test_assert_eq!(e.kind(), FsErrorKind::NotFound);
+                }
+
+                Ok(fs)
+            })
+    }
+
     test_stream(
         fs,
         "/smallfile.txt",
@@ -142,4 +168,6 @@ pub fn test_get_file_stream(fs: Fs) -> impl Future<Item = Fs, Error = FsError> {
     .and_then(|fs| test_stream(fs, "/largefile", ContentIterator::new(0, 100 * MB)))
     .and_then(|fs| test_stream(fs, "/dir2/bar", empty()))
     .and_then(|fs| test_stream(fs, "/dir2/daz", ContentIterator::new(72, 300)))
+    .and_then(|fs| test_fail(fs, "/dir2"))
+    .and_then(|fs| test_fail(fs, "/daz"))
 }

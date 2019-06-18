@@ -6,6 +6,22 @@ use std::path::PathBuf;
 
 pub const MB: u64 = 1024 * 1024;
 
+macro_rules! test_fail {
+    ($message:expr) => {
+        return Err(cloud_fs::FsError::new(
+            cloud_fs::FsErrorKind::TestFailure,
+            format!("assertion failed at {}:{}: {}", file!(), line!(), $message)
+        ));
+    };
+    ($($info:tt)*) => {
+        return Err(cloud_fs::FsError::new(
+            cloud_fs::FsErrorKind::TestFailure,
+            format!("assertion failed at {}:{}: {}",
+                file!(), line!(), std::fmt::format(format_args!($($info)*)))
+        ));
+    };
+}
+
 macro_rules! test_assert {
     ($check:expr) => {
         if !$check {

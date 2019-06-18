@@ -59,8 +59,9 @@ macro_rules! make_test {
         fn $name() -> FsResult<()> {
             let temp = crate::runner::prepare_test()?;
             let (fs_future, context) = $setup(temp.path())?;
+            let temp_path = temp.path().to_owned();
             let future = fs_future
-                .and_then(crate::runner::$pkg::$name)
+                .and_then(|fs| crate::runner::$pkg::$name(fs, temp_path))
                 .then(move |r| {
                     $cleanup(context);
                     r

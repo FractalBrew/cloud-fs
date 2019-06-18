@@ -205,7 +205,7 @@ impl FsPath {
     }
 
     /// Converts a `FsPath` into a std `PathBuf`.
-    pub(crate) fn as_std_path(&self) -> PathBuf {
+    pub fn as_std_path(&self) -> PathBuf {
         let mut path = self.to_string();
         if self.filename.is_none() && !self.directories.is_empty() {
             path.truncate(path.len() - 1);
@@ -940,6 +940,15 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
+        let base = FsPath::new("/")?;
+        let sub = FsPath::new("foo/bar/baz")?;
+        let joined = base.join(&sub)?;
+        assert_eq!(joined.to_string(), "/foo/bar/baz");
+        assert!(joined.is_absolute());
+        assert!(!joined.is_directory());
+        assert!(!joined.is_windows());
+        assert!(joined.is_above_base());
+
         Ok(())
     }
 
@@ -1214,6 +1223,15 @@ mod tests {
         assert!(!relative.is_directory());
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
+
+        let base = FsPath::new("/")?;
+        let next = FsPath::new("/foo/bar/baz/gad")?;
+        let relative = base.relative(&next)?;
+        assert_eq!(relative.to_string(), "foo/bar/baz/gad");
+        assert!(!relative.is_absolute());
+        assert!(!relative.is_directory());
+        assert!(!relative.is_windows());
+        assert!(!relative.is_above_base());
 
         Ok(())
     }
