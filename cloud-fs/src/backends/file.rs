@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 
 use bytes::BytesMut;
 use tokio::fs::*;
-use tokio::prelude::future::{err, Either};
-use tokio_fs::DirEntry;
+use tokio_fs::{DirEntry, SymlinkMetadataFuture};
 
 use super::BackendImplementation;
 use crate::types::{FsFile, FsPath};
@@ -17,6 +16,44 @@ use crate::*;
 
 // How many bytes to attempt to read from a file at a time.
 const BUFFER_SIZE: usize = 20 * 1024 * 1024;
+
+struct FsMetadataFuture {
+    space: FileSpace,
+    path: PathBuf,
+    future: SymlinkMetadataFuture<PathBuf>,
+}
+
+impl FsMetadataFuture {
+    fn fetch(space: &FileSpace, path: &Path) -> FsMetadataFuture {
+        FsMetadataFuture {
+            space: space.clone(),
+            path: path.to_owned(),
+            future: symlink_metadata(path.to_owned()),
+        }
+    }
+}
+
+impl Future for FsMetadataFuture {
+    type Item = (PathBuf, Metadata);
+    type Error = FsError;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.future.poll() {
+            Ok(Async::Ready(m)) => {
+                if m.is_file() {
+                    Ok(Async::Ready((self.path.clone(), m)))
+                } else {
+                    Err(FsError::new(
+                        FsErrorKind::NotFound,
+                        format!("{} was not found.", self.space.get_fs_path(&self.path)?),
+                    ))
+                }
+            }
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => Err(self.space.get_fserror(e, &self.path)),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct FileSpace {
@@ -255,19 +292,10 @@ impl FsImpl for FileBackend {
             Ok(target) => {
                 let space = self.space.clone();
 
-                FileFuture::from_future(symlink_metadata(target.clone()).then(move |r| match r {
-                    Ok(m) => {
-                        if m.is_file() {
-                            space.get_fsfile(&target, m)
-                        } else {
-                            Err(FsError::new(
-                                FsErrorKind::NotFound,
-                                format!("{} was not found.", path),
-                            ))
-                        }
-                    }
-                    Err(e) => Err(space.get_fserror(e, &target)),
-                }))
+                FileFuture::from_future(
+                    FsMetadataFuture::fetch(&space, &target)
+                        .and_then(move |(target, metadata)| space.get_fsfile(&target, metadata)),
+                )
             }
             Err(error) => FileFuture::from_error(error),
         }
@@ -277,27 +305,14 @@ impl FsImpl for FileBackend {
         match self.space.get_std_path(&path) {
             Ok(target) => {
                 let space = self.space.clone();
-                let build_space = self.space.clone();
+
+                let error_target = target.clone();
                 let build_target = target.clone();
-                let meta_target = target.clone();
+                let build_space = space.clone();
                 DataStreamFuture::from_future(
-                    symlink_metadata(target)
-                        .then(move |r| match r {
-                            Ok(m) => {
-                                if m.is_file() {
-                                    let error_target = meta_target.clone();
-                                    Either::A(
-                                        File::open(meta_target)
-                                            .map_err(move |e| space.get_fserror(e, &error_target)),
-                                    )
-                                } else {
-                                    Either::B(err(FsError::new(
-                                        FsErrorKind::NotFound,
-                                        format!("{} was not found.", path),
-                                    )))
-                                }
-                            }
-                            Err(e) => Either::B(err(space.get_fserror(e, &meta_target))),
+                    FsMetadataFuture::fetch(&self.space, &target)
+                        .and_then(|(target, _)| {
+                            File::open(target).map_err(move |e| space.get_fserror(e, &error_target))
                         })
                         .map(move |f| FileStream::build(&build_target, build_space, f)),
                 )
