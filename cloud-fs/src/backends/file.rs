@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use bytes::BytesMut;
 use tokio::fs::*;
-use tokio_fs::DirEntry;
 use tokio::prelude::future::{err, Either};
+use tokio_fs::DirEntry;
 
 use super::BackendImplementation;
 use crate::types::{FsFile, FsPath};
@@ -26,7 +26,10 @@ struct FileSpace {
 impl FileSpace {
     fn get_std_path(&self, path: &FsPath) -> FsResult<PathBuf> {
         if !path.is_absolute() {
-            return Err(FsError::new(FsErrorKind::ParseError, "Target path is expected to be absolute."));
+            return Err(FsError::new(
+                FsErrorKind::ParseError,
+                "Target path is expected to be absolute.",
+            ));
         }
 
         let relative = FsPath::new("/")?.relative(path)?;
@@ -37,7 +40,10 @@ impl FileSpace {
 
     fn get_fs_path(&self, path: &Path) -> FsResult<FsPath> {
         if !path.is_absolute() {
-            return Err(FsError::new(FsErrorKind::ParseError, "Target path is expected to be absolute."));
+            return Err(FsError::new(
+                FsErrorKind::ParseError,
+                "Target path is expected to be absolute.",
+            ));
         }
 
         let target = FsPath::from_std_path(path)?;
@@ -49,7 +55,9 @@ impl FileSpace {
     fn get_fserror(&self, error: io::Error, path: &Path) -> FsError {
         match self.get_fs_path(path) {
             Ok(target) => match error.kind() {
-                io::ErrorKind::NotFound => FsError::new(FsErrorKind::NotFound, format!("{} was not found.", target)),
+                io::ErrorKind::NotFound => {
+                    FsError::new(FsErrorKind::NotFound, format!("{} was not found.", target))
+                }
                 _ => FsError::new(FsErrorKind::Other, format!("Failed to access {}.", target)),
             },
             Err(e) => e,
@@ -87,8 +95,9 @@ impl FileLister {
     fn add_directory(&mut self, path: PathBuf) {
         let space = self.space.clone();
         let error_path = path.clone();
-        self.stream
-            .push(stream_from_future(read_dir(path)).map_err(move |e| space.get_fserror(e, &error_path)));
+        self.stream.push(
+            stream_from_future(read_dir(path)).map_err(move |e| space.get_fserror(e, &error_path)),
+        );
         self.stream_is_done = false;
     }
 
@@ -183,7 +192,11 @@ struct FileStream {
 
 impl FileStream {
     fn build(path: &Path, space: FileSpace, file: File) -> DataStream {
-        DataStream::from_stream(FileStream { path: path.to_owned(), space, file })
+        DataStream::from_stream(FileStream {
+            path: path.to_owned(),
+            space,
+            file,
+        })
     }
 }
 
@@ -229,9 +242,10 @@ impl FileBackend {
 impl FsImpl for FileBackend {
     fn list_files(&self, path: FsPath) -> FileListFuture {
         match self.space.get_std_path(&path) {
-            Ok(target) => {
-                FileListFuture::from_item(FileListStream::from_stream(FileLister::list(self.space.clone(), target)))
-            }
+            Ok(target) => FileListFuture::from_item(FileListStream::from_stream(FileLister::list(
+                self.space.clone(),
+                target,
+            ))),
             Err(error) => FileListFuture::from_error(error),
         }
     }
@@ -252,9 +266,7 @@ impl FsImpl for FileBackend {
                             ))
                         }
                     }
-                    Err(e) => {
-                        Err(space.get_fserror(e, &target))
-                    }
+                    Err(e) => Err(space.get_fserror(e, &target)),
                 }))
             }
             Err(error) => FileFuture::from_error(error),
@@ -268,23 +280,28 @@ impl FsImpl for FileBackend {
                 let build_space = self.space.clone();
                 let build_target = target.clone();
                 let meta_target = target.clone();
-                DataStreamFuture::from_future(symlink_metadata(target)
-                    .then(move |r| {
-                        match r {
+                DataStreamFuture::from_future(
+                    symlink_metadata(target)
+                        .then(move |r| match r {
                             Ok(m) => {
                                 if m.is_file() {
                                     let error_target = meta_target.clone();
-                                    Either::A(File::open(meta_target)
-                                        .map_err(move |e| space.get_fserror(e, &error_target)))
+                                    Either::A(
+                                        File::open(meta_target)
+                                            .map_err(move |e| space.get_fserror(e, &error_target)),
+                                    )
                                 } else {
-                                    Either::B(err(FsError::new(FsErrorKind::NotFound, format!("{} was not found.", path))))
+                                    Either::B(err(FsError::new(
+                                        FsErrorKind::NotFound,
+                                        format!("{} was not found.", path),
+                                    )))
                                 }
-                            },
+                            }
                             Err(e) => Either::B(err(space.get_fserror(e, &meta_target))),
-                        }
-                    })
-                    .map(move |f| FileStream::build(&build_target, build_space, f)))
-            },
+                        })
+                        .map(move |f| FileStream::build(&build_target, build_space, f)),
+                )
+            }
             Err(error) => DataStreamFuture::from_error(error),
         }
     }

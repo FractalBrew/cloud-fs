@@ -89,15 +89,14 @@ pub fn test_get_file(fs: Fs, _local_path: PathBuf) -> impl Future<Item = Fs, Err
     }
 
     fn test_fail(fs: Fs, path: &str) -> impl Future<Item = Fs, Error = FsError> {
-        fs.get_file(FsPath::new(path).unwrap())
-            .then(move |result| {
-                test_assert!(result.is_err());
-                if let Err(e) = result {
-                    test_assert_eq!(e.kind(), FsErrorKind::NotFound);
-                }
+        fs.get_file(FsPath::new(path).unwrap()).then(move |result| {
+            test_assert!(result.is_err());
+            if let Err(e) = result {
+                test_assert_eq!(e.kind(), FsErrorKind::NotFound);
+            }
 
-                Ok(fs)
-            })
+            Ok(fs)
+        })
     }
 
     test_get(fs, "/largefile", 100 * MB)
@@ -108,7 +107,10 @@ pub fn test_get_file(fs: Fs, _local_path: PathBuf) -> impl Future<Item = Fs, Err
         .and_then(|fs| test_fail(fs, "/daz"))
 }
 
-pub fn test_get_file_stream(fs: Fs, _local_path: PathBuf) -> impl Future<Item = Fs, Error = FsError> {
+pub fn test_get_file_stream(
+    fs: Fs,
+    _local_path: PathBuf,
+) -> impl Future<Item = Fs, Error = FsError> {
     fn test_stream<I>(fs: Fs, path: &str, data: I) -> impl Future<Item = Fs, Error = FsError>
     where
         I: Iterator<Item = u8>,
