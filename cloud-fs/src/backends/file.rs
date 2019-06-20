@@ -280,25 +280,26 @@ impl Future for FileWriter {
     type Error = FsError;
 
     fn poll(&mut self) -> Poll<File, FsError> {
-        if let Some(ref mut future) = self.write_future {
-            match future.poll() {
-                Ok(Async::Ready((file, _))) => {
-                    self.file = Some(file);
-                    self.write_future = None;
+        loop {
+            if let Some(ref mut future) = self.write_future {
+                match future.poll() {
+                    Ok(Async::Ready((file, _))) => {
+                        self.file = Some(file);
+                        self.write_future = None;
+                    }
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Err(e) => return Err(FsError::from_error(e)),
                 }
+            }
+
+            match self.stream.poll() {
+                Ok(Async::Ready(Some(data))) => {
+                    self.write_future = Some(write_all(self.file.take().unwrap(), data));
+                }
+                Ok(Async::Ready(None)) => return Ok(Async::Ready(self.file.take().unwrap())),
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Err(e) => return Err(FsError::from_error(e)),
             }
-        }
-
-        match self.stream.poll() {
-            Ok(Async::Ready(Some(data))) => {
-                self.write_future = Some(write_all(self.file.take().unwrap(), data));
-                self.poll()
-            }
-            Ok(Async::Ready(None)) => Ok(Async::Ready(self.file.take().unwrap())),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(e) => Err(FsError::from_error(e)),
         }
     }
 }
@@ -388,7 +389,6 @@ impl FsImpl for FileBackend {
     fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
         match self.space.get_std_path(&path) {
             Ok(target) => {
-                println!("Deleting {}", target.display());
                 let space = self.space.clone();
 
                 OperationCompleteFuture::from_future(

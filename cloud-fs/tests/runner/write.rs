@@ -84,7 +84,7 @@ pub fn test_write_from_stream(
         let target = context.get_target(&remote);
         fs.write_from_stream(
             remote.clone(),
-            stream_iterator(ContentIterator::new(seed, length), 30),
+            stream_iterator(ContentIterator::new(seed, length), (length / 10) as usize),
         )
         .and_then(move |()| {
             let meta = metadata(target.clone());
@@ -135,4 +135,6 @@ pub fn test_write_from_stream(
     }
 
     test_write(fs, context, "/foobar", 58, 300)
+        .and_then(|(fs, context)| test_write(fs, context, "/dir3", 27, 500))
+        .and_then(|(fs, context)| test_write(fs, context, "/dir2/daz", 27, 100 * MB))
 }
