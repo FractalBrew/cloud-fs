@@ -4,6 +4,11 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
+use bytes::{BufMut, BytesMut};
+use tokio::prelude::*;
+
+use cloud_fs::Data;
+
 pub const MB: u64 = 1024 * 1024;
 
 macro_rules! test_fail {
@@ -50,9 +55,6 @@ macro_rules! test_assert {
     };
 }
 
-// assertion failed: `(left == right)`
-//   left: ``
-//  right: ``
 macro_rules! test_assert_eq {
     ($found:expr, $expected:expr) => {
         if $found != $expected {
@@ -83,7 +85,51 @@ macro_rules! test_assert_eq {
     };
 }
 
+pub struct IteratorStream<I>
+where
+    I: Iterator<Item = u8>,
+{
+    iterator: I,
+    buffer_size: usize,
+}
+
+pub fn stream_iterator<I>(iterator: I, buffer_size: usize) -> IteratorStream<I>
+where
+    I: Iterator<Item = u8>,
+{
+    IteratorStream {
+        iterator,
+        buffer_size,
+    }
+}
+
+impl<I> Stream for IteratorStream<I>
+where
+    I: Iterator<Item = u8>,
+{
+    type Item = Data;
+    type Error = FsError;
+
+    fn poll(&mut self) -> Poll<Option<Data>, FsError> {
+        let mut buffer = BytesMut::with_capacity(self.buffer_size);
+
+        while let Some(b) = self.iterator.next() {
+            buffer.put_u8(b);
+            if buffer.len() == self.buffer_size {
+                break;
+            }
+        }
+
+        if buffer.is_empty() {
+            Ok(Async::Ready(None))
+        } else {
+            Ok(Async::Ready(Some(buffer.freeze())))
+        }
+    }
+}
+
 pub struct ContentIterator {
+    seed: u8,
     value: u8,
     length: u64,
     count: u64,
@@ -92,6 +138,7 @@ pub struct ContentIterator {
 impl ContentIterator {
     pub fn new(seed: u8, length: u64) -> ContentIterator {
         ContentIterator {
+            seed,
             value: seed,
             length,
             count: 0,
@@ -111,6 +158,7 @@ impl Iterator for ContentIterator {
         let new_value = self.value;
         let (new_value, _) = new_value.overflowing_add(27);
         let (new_value, _) = new_value.overflowing_mul(9);
+        let (new_value, _) = new_value.overflowing_sub(self.seed);
         let (new_value, _) = new_value.overflowing_add(5);
         self.value = new_value;
         Some(self.value)

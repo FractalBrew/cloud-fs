@@ -10,6 +10,7 @@ use bytes::Bytes;
 use crate::backends::Backend;
 pub use path::FsPath;
 
+/// The data type used for streaming data from and to files.
 pub type Data = Bytes;
 
 /// The type of an [`FsError`](struct.FsError.html).
@@ -63,6 +64,10 @@ impl FsError {
     /// Gets the [`FsErrorKind`](enum.FsErrorKind.html) of this `FsError`.
     pub fn kind(&self) -> FsErrorKind {
         self.kind
+    }
+
+    pub(crate) fn not_found(path: &FsPath) -> FsError {
+        FsError::new(FsErrorKind::NotFound, format!("{} does not exist.", path))
     }
 }
 

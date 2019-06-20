@@ -5,21 +5,17 @@ extern crate cloud_fs;
 #[macro_use]
 mod runner;
 
-use std::path::Path;
-
 use tokio::prelude::Future;
 
 use cloud_fs::backends::Backend;
 use cloud_fs::{Fs, FsError, FsPath, FsResult, FsSettings};
+use runner::TestContext;
 
-fn build_fs(path: &Path) -> FsResult<(impl Future<Item = Fs, Error = FsError>, ())> {
-    let mut base = FsPath::new(format!("{}/", path.display()))?;
-    base.push_dir("test1");
-    base.push_dir("dir1");
-
-    Ok((Fs::new(FsSettings::new(Backend::File, base)), ()))
+fn build_fs(context: &TestContext) -> FsResult<(impl Future<Item = Fs, Error = FsError>, ())> {
+    let root = FsPath::new(format!("{}/", context.get_root().display()))?;
+    Ok((Fs::new(FsSettings::new(Backend::File, root)), ()))
 }
 
 fn cleanup(_: ()) {}
 
-build_tests!("file", true, build_fs, cleanup);
+build_tests!("file", false, build_fs, cleanup);

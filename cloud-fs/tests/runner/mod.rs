@@ -17,13 +17,45 @@ use utils::*;
 
 use cloud_fs::*;
 
-pub fn prepare_test() -> FsResult<TempDir> {
+pub struct TestContext {
+    temp: TempDir,
+    root: PathBuf,
+}
+
+impl TestContext {
+    pub fn get_target(&self, path: &FsPath) -> PathBuf {
+        let mut target = self.root.clone();
+        target.push(
+            FsPath::new("/")
+                .unwrap()
+                .relative(path)
+                .unwrap()
+                .as_std_path(),
+        );
+        target
+    }
+
+    pub fn get_root(&self) -> PathBuf {
+        self.root.clone()
+    }
+
+    pub fn cleanup(self) -> FsResult<()> {
+        Ok(self.temp.close()?)
+    }
+}
+
+pub fn prepare_test() -> FsResult<TestContext> {
     let temp = tempdir()?;
 
     let mut dir = PathBuf::from(temp.path());
     dir.push("test1");
     dir.push("dir1");
     create_dir_all(dir.clone())?;
+
+    let context = TestContext {
+        temp,
+        root: dir.clone(),
+    };
 
     write_file(
         &dir,
@@ -32,6 +64,10 @@ pub fn prepare_test() -> FsResult<TempDir> {
     )?;
     write_file(&dir, "largefile", ContentIterator::new(0, 100 * MB))?;
     write_file(&dir, "mediumfile", ContentIterator::new(58, 5 * MB))?;
+
+    let mut em = dir.clone();
+    em.push("dir3");
+    create_dir_all(em)?;
 
     dir.push("dir2");
     create_dir_all(dir.clone())?;
@@ -44,34 +80,29 @@ pub fn prepare_test() -> FsResult<TempDir> {
     write_file(&dir, "hop", empty())?;
     write_file(&dir, "yu", empty())?;
 
-    Ok(temp)
-}
-
-pub fn cleanup(temp: TempDir) -> FsResult<()> {
-    temp.close()?;
-
-    Ok(())
+    Ok(context)
 }
 
 macro_rules! make_test {
     ($pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         #[test]
         fn $name() -> FsResult<()> {
-            let temp = crate::runner::prepare_test()?;
-            let (fs_future, context) = $setup(temp.path())?;
-            let temp_path = temp.path().to_owned();
+            let test_context = crate::runner::prepare_test()?;
+            let (fs_future, context) = $setup(&test_context)?;
             let future = fs_future
-                .and_then(|fs| crate::runner::$pkg::$name(fs, temp_path))
+                .and_then(|fs| crate::runner::$pkg::$name(fs, test_context))
                 .then(move |r| {
                     $cleanup(context);
                     r
                 });
 
             match cloud_fs::utils::run_future(future) {
+                Ok(Ok((_, test_context))) => test_context.cleanup(),
                 Ok(Err(e)) => {
                     if e.kind() == cloud_fs::FsErrorKind::NotImplemented {
                         if $allow_incomplete {
                             eprintln!("Test attempts to use unimplemented feature: {}", e);
+                            Ok(())
                         } else {
                             panic!("Test attempts to use unimplemented feature: {}", e);
                         }
@@ -85,10 +116,7 @@ macro_rules! make_test {
                     stringify!($name),
                     e
                 ),
-                _ => (),
             }
-
-            crate::runner::cleanup(temp)
         }
     };
 }

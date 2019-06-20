@@ -32,7 +32,7 @@ use tokio::prelude::*;
 use backends::connect;
 use backends::*;
 pub use futures::*;
-pub use types::{FsError, FsErrorKind, FsFile, FsPath, FsResult, FsSettings};
+pub use types::{Data, FsError, FsErrorKind, FsFile, FsPath, FsResult, FsSettings};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
@@ -136,7 +136,8 @@ impl Fs {
 
     /// Gets info about the file at the given path.
     ///
-    /// This will return an error if the file does not exist.
+    /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
+    /// error if the file does not exist.
     pub fn get_file(&self, path: FsPath) -> FileFuture {
         if let Err(e) = self.check_path(&path, false) {
             return FileFuture::from_error(e);
@@ -150,6 +151,9 @@ impl Fs {
     /// The data returned is not necessarily in any particular chunk size.
     /// Dropping the stream at any point before completion should be considered
     /// to be safe.
+    ///
+    /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
+    /// error if the file does not exist.
     pub fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
         if let Err(e) = self.check_path(&path, false) {
             return DataStreamFuture::from_error(e);
@@ -160,8 +164,8 @@ impl Fs {
 
     /// Deletes the file at the given path.
     ///
-    /// This will not resolve to an error if the file already does not exist. It
-    /// will return an error if the attempt to delete the file failed.
+    /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
+    /// error if the file does not exist.
     pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
         if let Err(e) = self.check_path(&path, false) {
             return OperationCompleteFuture::from_error(e);
@@ -173,8 +177,9 @@ impl Fs {
     /// Writes a stream of data the the file at the given path.
     ///
     /// The future returned will only resolve once all the data from the stream
-    /// is succesfully written to storage. If the stream resolves to None at any
-    /// point this will be considered the end of the data to be written.
+    /// is succesfully written to storage. If the provided stream resolves to
+    /// None at any point this will be considered the end of the data to be
+    /// written.
     pub fn write_from_stream<S, I, E>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
     where
         S: Stream<Item = I, Error = E> + Send + Sync + 'static,

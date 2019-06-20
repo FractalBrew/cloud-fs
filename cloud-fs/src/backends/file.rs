@@ -7,25 +7,27 @@ use std::path::{Path, PathBuf};
 
 use bytes::BytesMut;
 use tokio::fs::*;
+use tokio::io::{flush, write_all, WriteAll};
+use tokio::prelude::future::{err, ok, Either};
 use tokio_fs::{DirEntry, SymlinkMetadataFuture};
 
 use super::BackendImplementation;
-use crate::types::{FsFile, FsPath};
+use crate::types::{Data, FsFile, FsPath};
 use crate::utils::{stream_from_future, MergedStreams};
 use crate::*;
 
 // How many bytes to attempt to read from a file at a time.
 const BUFFER_SIZE: usize = 20 * 1024 * 1024;
 
-struct FsMetadataFuture {
+struct FsPathInfo {
     space: FileSpace,
     path: PathBuf,
     future: SymlinkMetadataFuture<PathBuf>,
 }
 
-impl FsMetadataFuture {
-    fn fetch(space: &FileSpace, path: &Path) -> FsMetadataFuture {
-        FsMetadataFuture {
+impl FsPathInfo {
+    fn fetch(space: &FileSpace, path: &Path) -> FsPathInfo {
+        FsPathInfo {
             space: space.clone(),
             path: path.to_owned(),
             future: symlink_metadata(path.to_owned()),
@@ -33,24 +35,21 @@ impl FsMetadataFuture {
     }
 }
 
-impl Future for FsMetadataFuture {
-    type Item = (PathBuf, Metadata);
+impl Future for FsPathInfo {
+    type Item = (PathBuf, Option<Metadata>);
     type Error = FsError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.future.poll() {
-            Ok(Async::Ready(m)) => {
-                if m.is_file() {
-                    Ok(Async::Ready((self.path.clone(), m)))
+            Ok(Async::Ready(m)) => Ok(Async::Ready((self.path.clone(), Some(m)))),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Ok(Async::Ready((self.path.clone(), None)))
                 } else {
-                    Err(FsError::new(
-                        FsErrorKind::NotFound,
-                        format!("{} was not found.", self.space.get_fs_path(&self.path)?),
-                    ))
+                    Err(self.space.get_fserror(e, &self.path))
                 }
             }
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(e) => Err(self.space.get_fserror(e, &self.path)),
         }
     }
 }
@@ -92,9 +91,7 @@ impl FileSpace {
     fn get_fserror(&self, error: io::Error, path: &Path) -> FsError {
         match self.get_fs_path(path) {
             Ok(target) => match error.kind() {
-                io::ErrorKind::NotFound => {
-                    FsError::new(FsErrorKind::NotFound, format!("{} was not found.", target))
-                }
+                io::ErrorKind::NotFound => FsError::not_found(&target),
                 _ => FsError::new(FsErrorKind::Other, format!("Failed to access {}.", target)),
             },
             Err(e) => e,
@@ -106,6 +103,13 @@ impl FileSpace {
             path: self.get_fs_path(path)?,
             size: metadata.len(),
         })
+    }
+
+    fn not_found(&self, target: &Path) -> FsError {
+        match self.get_fs_path(target) {
+            Ok(path) => FsError::not_found(&path),
+            Err(e) => e,
+        }
     }
 }
 
@@ -131,9 +135,9 @@ impl FileLister {
 
     fn add_directory(&mut self, path: PathBuf) {
         let space = self.space.clone();
-        let error_path = path.clone();
         self.stream.push(
-            stream_from_future(read_dir(path)).map_err(move |e| space.get_fserror(e, &error_path)),
+            stream_from_future(read_dir(path.clone()))
+                .map_err(move |e| space.get_fserror(e, &path)),
         );
         self.stream_is_done = false;
     }
@@ -255,6 +259,50 @@ impl Stream for FileStream {
     }
 }
 
+struct FileWriter {
+    file: Option<File>,
+    stream: DataStream,
+    write_future: Option<WriteAll<File, Data>>,
+}
+
+impl FileWriter {
+    fn new(file: File, stream: DataStream) -> FileWriter {
+        FileWriter {
+            file: Some(file),
+            stream,
+            write_future: None,
+        }
+    }
+}
+
+impl Future for FileWriter {
+    type Item = File;
+    type Error = FsError;
+
+    fn poll(&mut self) -> Poll<File, FsError> {
+        if let Some(ref mut future) = self.write_future {
+            match future.poll() {
+                Ok(Async::Ready((file, _))) => {
+                    self.file = Some(file);
+                    self.write_future = None;
+                }
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(e) => return Err(FsError::from_error(e)),
+            }
+        }
+
+        match self.stream.poll() {
+            Ok(Async::Ready(Some(data))) => {
+                self.write_future = Some(write_all(self.file.take().unwrap(), data));
+                self.poll()
+            }
+            Ok(Async::Ready(None)) => Ok(Async::Ready(self.file.take().unwrap())),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(e) => Err(FsError::from_error(e)),
+        }
+    }
+}
+
 /// The backend implementation for local file storage.
 #[derive(Debug)]
 pub struct FileBackend {
@@ -292,10 +340,18 @@ impl FsImpl for FileBackend {
             Ok(target) => {
                 let space = self.space.clone();
 
-                FileFuture::from_future(
-                    FsMetadataFuture::fetch(&space, &target)
-                        .and_then(move |(target, metadata)| space.get_fsfile(&target, metadata)),
-                )
+                FileFuture::from_future(FsPathInfo::fetch(&self.space, &target).and_then(
+                    move |(target, meta)| match meta {
+                        Some(m) => {
+                            if m.is_file() {
+                                space.get_fsfile(&target, m)
+                            } else {
+                                Err(space.not_found(&target))
+                            }
+                        }
+                        None => Err(space.not_found(&target)),
+                    },
+                ))
             }
             Err(error) => FileFuture::from_error(error),
         }
@@ -305,33 +361,87 @@ impl FsImpl for FileBackend {
         match self.space.get_std_path(&path) {
             Ok(target) => {
                 let space = self.space.clone();
-
-                let error_target = target.clone();
-                let build_target = target.clone();
                 let build_space = space.clone();
+
                 DataStreamFuture::from_future(
-                    FsMetadataFuture::fetch(&self.space, &target)
-                        .and_then(|(target, _)| {
-                            File::open(target).map_err(move |e| space.get_fserror(e, &error_target))
+                    FsPathInfo::fetch(&self.space, &target)
+                        .and_then(move |(target, meta)| match meta {
+                            Some(m) => {
+                                if m.is_file() {
+                                    Either::A(
+                                        File::open(target.clone())
+                                            .map_err(move |e| space.get_fserror(e, &target)),
+                                    )
+                                } else {
+                                    Either::B(err(space.not_found(&target)))
+                                }
+                            }
+                            None => Either::B(err(space.not_found(&target))),
                         })
-                        .map(move |f| FileStream::build(&build_target, build_space, f)),
+                        .map(move |f| FileStream::build(&target, build_space, f)),
                 )
             }
             Err(error) => DataStreamFuture::from_error(error),
         }
     }
 
-    fn delete_file(&self, _path: FsPath) -> OperationCompleteFuture {
-        OperationCompleteFuture::from_error(FsError::new(
-            FsErrorKind::NotImplemented,
-            "FileBackend::delete_file is not yet implemented.",
-        ))
+    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
+        match self.space.get_std_path(&path) {
+            Ok(target) => {
+                println!("Deleting {}", target.display());
+                let space = self.space.clone();
+
+                OperationCompleteFuture::from_future(
+                    FsPathInfo::fetch(&self.space, &target).and_then(move |(target, meta)| {
+                        match meta {
+                            Some(m) => {
+                                if m.is_file() {
+                                    Either::A(
+                                        remove_file(target.clone())
+                                            .map_err(move |e| space.get_fserror(e, &target)),
+                                    )
+                                } else {
+                                    Either::B(err(space.not_found(&target)))
+                                }
+                            }
+                            None => Either::B(err(space.not_found(&target))),
+                        }
+                    }),
+                )
+            }
+            Err(error) => OperationCompleteFuture::from_error(error),
+        }
     }
 
-    fn write_from_stream(&self, _path: FsPath, _stream: DataStream) -> OperationCompleteFuture {
-        OperationCompleteFuture::from_error(FsError::new(
-            FsErrorKind::NotImplemented,
-            "FileBackend::write_from_stream is not yet implemented.",
-        ))
+    fn write_from_stream(&self, path: FsPath, stream: DataStream) -> OperationCompleteFuture {
+        match self.space.get_std_path(&path) {
+            Ok(target) => {
+                let space = self.space.clone();
+
+                OperationCompleteFuture::from_future(
+                    FsPathInfo::fetch(&self.space, &target)
+                        .and_then(move |(target, meta)| match meta {
+                            Some(m) => {
+                                if m.is_file() {
+                                    Either::A(ok(target))
+                                } else if m.is_dir() {
+                                    Either::B(remove_dir(target.clone()).then(move |r| match r {
+                                        Ok(_) => Ok(target),
+                                        Err(_) => Err(space.not_found(&target)),
+                                    }))
+                                } else {
+                                    Either::A(err(space.not_found(&target)))
+                                }
+                            }
+                            None => Either::A(ok(target)),
+                        })
+                        .and_then(|target| File::create(target).map_err(FsError::from_error))
+                        .and_then(move |file| FileWriter::new(file, stream))
+                        .and_then(|file| flush(file).map_err(FsError::from_error))
+                        .map(|_| ()),
+                )
+            }
+            Err(error) => OperationCompleteFuture::from_error(error),
+        }
     }
 }
