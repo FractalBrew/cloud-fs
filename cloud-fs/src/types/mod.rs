@@ -4,6 +4,7 @@ use std::cmp::{Ord, Ordering};
 use std::error::Error;
 use std::fmt;
 use std::io;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use bytes::Bytes;
 
@@ -88,6 +89,25 @@ impl From<io::Error> for FsError {
 /// A simple alias for a `Result` where the error is an [`FsError`](struct.FsError.html).
 pub type FsResult<R> = Result<R, FsError>;
 
+#[derive(Clone, Debug)]
+pub enum Host {
+    Name(String),
+    Ipv4(Ipv4Addr),
+    Ipv6(Ipv6Addr),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Address {
+    pub host: Host,
+    pub port: Option<u16>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Auth {
+    pub username: String,
+    pub password: String,
+}
+
 /// Settings used to create an [`Fs`](struct.Fs.html) instance.
 ///
 /// Different backends may interpret these settings in different ways. Check
@@ -95,13 +115,33 @@ pub type FsResult<R> = Result<R, FsError>;
 #[derive(Clone, Debug)]
 pub struct FsSettings {
     pub(crate) backend: Backend,
+    pub(crate) address: Option<Address>,
+    pub(crate) auth: Option<Auth>,
     pub(crate) path: FsPath,
 }
 
 impl FsSettings {
-    /// Creates settins for a specific backend with a given [`FsPath`](struct.FsPath.html).
+    /// Creates settings for a specific backend with a given [`FsPath`](struct.FsPath.html).
     pub fn new(backend: Backend, path: FsPath) -> FsSettings {
-        FsSettings { backend, path }
+        FsSettings {
+            backend,
+            address: None,
+            auth: None,
+            path,
+        }
+    }
+
+    /// Sets the address for the [`Fs`](struct.Fs.html).
+    pub fn set_address(&mut self, host: Host, port: Option<u16>) {
+        self.address = Some(Address { host, port });
+    }
+
+    /// Sets the authentication information for the [`Fs`](struct.Fs.html).
+    pub fn set_authentication(&mut self, username: &str, password: &str) {
+        self.auth = Some(Auth {
+            username: username.to_owned(),
+            password: password.to_owned(),
+        });
     }
 
     /// Gets this setting's current [`Backend`](backends/enum.Backend.html).

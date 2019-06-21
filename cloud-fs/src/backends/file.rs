@@ -313,6 +313,10 @@ pub struct FileBackend {
 
 impl FileBackend {
     /// Creates a new instance of the file backend.
+    ///
+    /// The authentication and address parts of the settings are ignored. The
+    /// path is interpreted as a local and then used as the root of the
+    /// filesystem accessed by the created [`Fs`](../struct.Fs.html).
     pub fn connect(settings: FsSettings) -> ConnectFuture {
         ConnectFuture::from_item(Fs {
             backend: BackendImplementation::File(FileBackend {

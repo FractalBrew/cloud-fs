@@ -13,7 +13,7 @@ use runner::TestContext;
 
 fn build_fs(context: &TestContext) -> FsResult<(impl Future<Item = Fs, Error = FsError>, ())> {
     let root = FsPath::new(format!("{}/", context.get_root().display()))?;
-    Ok((Fs::new(FsSettings::new(Backend::File, root)), ()))
+    Ok((Fs::connect(FsSettings::new(Backend::File, root)), ()))
 }
 
 fn cleanup(_: ()) {}

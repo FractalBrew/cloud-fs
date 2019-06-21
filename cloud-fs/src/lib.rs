@@ -95,8 +95,8 @@ impl Fs {
         }
     }
 
-    /// Create a new `Fs` based on the settings passed.
-    pub fn new(settings: FsSettings) -> ConnectFuture {
+    /// Connect to a `Fs` based on the settings passed.
+    pub fn connect(settings: FsSettings) -> ConnectFuture {
         if !settings.path.is_absolute() {
             return ConnectFuture::from_error(FsError::new(
                 FsErrorKind::InvalidSettings,

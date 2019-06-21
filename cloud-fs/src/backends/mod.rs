@@ -15,10 +15,10 @@ pub use file::FileBackend;
 #[derive(Clone, Debug)]
 pub enum Backend {
     #[cfg(feature = "file")]
-    /// The (file backend)[file/index.html].
+    /// The (file backend)[file/index.html]. Included with the "file" feature.
     File,
     #[cfg(feature = "b2")]
-    /// The (B2 backend)[b2/index.html].
+    /// The (B2 backend)[b2/index.html]. Included with the "b2" feature.
     B2,
 }
 
