@@ -6,7 +6,61 @@ use super::TestContext;
 
 use cloud_fs::*;
 
-pub fn test_delete_file(
+pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> FsResult<()> {
+    async fn test_pass(fs: &Fs, context: &TestContext, path: &str) -> FsResult<()> {
+        let remote = FsPath::new(path)?;
+        let target = context.get_target(&remote);
+
+        fs.delete_file(remote).await?;
+
+        match metadata(target.clone()) {
+            Ok(m) => {
+                test_assert!(m.is_file(), "Failed to delete {}", target.display());
+            }
+            Err(e) => {
+                test_assert_eq!(
+                    e.kind(),
+                    ErrorKind::NotFound,
+                    "Should have failed to find {}",
+                    target.display()
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn test_fail(fs: &Fs, context: &TestContext, path: &str) -> FsResult<()> {
+        let remote = FsPath::new(path)?;
+        let target = context.get_target(&remote);
+
+        match fs.delete_file(remote.clone()).await {
+            Ok(()) => test_fail!("Should have failed to delete {}", remote),
+            Err(e) => test_assert_eq!(
+                e.kind(),
+                FsErrorKind::NotFound,
+                "The file {} should have not been found.",
+                remote
+            ),
+        }
+
+        if let Ok(m) = metadata(target) {
+            test_assert!(m.is_dir(), "Shouldn't have deleted {}.", remote);
+        }
+
+        Ok(())
+    }
+
+    test_pass(fs, context, "/largefile").await?;
+    test_pass(fs, context, "/smallfile.txt").await?;
+    test_pass(fs, context, "/dir2/daz").await?;
+    test_fail(fs, context, "/biz").await?;
+    test_fail(fs, context, "/dir2").await?;
+
+    Ok(())
+}
+
+/*pub fn test_delete_file(
     fs: Fs,
     context: TestContext,
 ) -> impl Future<Item = (Fs, TestContext), Error = FsError> {
@@ -135,4 +189,4 @@ pub fn test_write_from_stream(
     test_write(fs, context, "/foobar", 58, 300)
         .and_then(|(fs, context)| test_write(fs, context, "/dir3", 27, 500))
         .and_then(|(fs, context)| test_write(fs, context, "/dir2/daz", 27, 100 * MB))
-}
+}*/

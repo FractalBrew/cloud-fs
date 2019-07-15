@@ -12,7 +12,7 @@ use ::futures::future::{BoxFuture, FutureExt};
 use ::futures::ready;
 use ::futures::stream::Stream;
 use bytes::BytesMut;
-use tokio_fs::{read_dir, symlink_metadata, DirEntry};
+use tokio_fs::{read_dir, remove_file, symlink_metadata, DirEntry};
 
 use super::BackendImplementation;
 use crate::futures::{stream_from_future, MergedStreams};
@@ -394,10 +394,10 @@ impl FsImpl for FileBackend {
 
     fn get_file(&self, path: FsPath) -> FileFuture {
         async fn get(path: FsPath, space: FileSpace) -> FsResult<FsFile> {
-            let file = space.get_std_path(&path)?;
-            let metadata = match symlink_metadata(file.clone()).compat().await {
+            let target = space.get_std_path(&path)?;
+            let metadata = match symlink_metadata(target.clone()).compat().await {
                 Ok(m) => m,
-                Err(e) => return Err(space.get_fserror(e, &file)),
+                Err(e) => return Err(space.get_fserror(e, &target)),
             };
 
             if metadata.is_file() {
@@ -406,7 +406,7 @@ impl FsImpl for FileBackend {
                     size: metadata.len(),
                 })
             } else {
-                Err(space.not_found(&file))
+                Err(space.not_found(&target))
             }
         }
 
@@ -445,33 +445,24 @@ impl FsImpl for FileBackend {
     }
 
     fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
-        unimplemented!();
-        /*
-                match self.space.get_std_path(&path) {
-                    Ok(target) => {
-                        let space = self.space.clone();
+        async fn delete(path: FsPath, space: FileSpace) -> FsResult<()> {
+            let target = space.get_std_path(&path)?;
+            let metadata = match symlink_metadata(target.clone()).compat().await {
+                Ok(m) => m,
+                Err(e) => return Err(space.get_fserror(e, &target)),
+            };
 
-                        OperationCompleteFuture::from_future(
-                            FsPathInfo::fetch(&self.space, &target).and_then(move |(target, meta)| {
-                                match meta {
-                                    Some(m) => {
-                                        if m.is_file() {
-                                            Either::A(
-                                                remove_file(target.clone())
-                                                    .map_err(move |e| space.get_fserror(e, &target)),
-                                            )
-                                        } else {
-                                            Either::B(err(space.not_found(&target)))
-                                        }
-                                    }
-                                    None => Either::B(err(space.not_found(&target))),
-                                }
-                            }),
-                        )
-                    }
-                    Err(error) => OperationCompleteFuture::from_error(error),
+            if metadata.is_file() {
+                match remove_file(target.clone()).compat().await {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(space.get_fserror(e, &target)),
                 }
-        */
+            } else {
+                Err(space.not_found(&target))
+            }
+        }
+
+        OperationCompleteFuture::from_future(delete(path, self.space.clone()))
     }
 
     fn write_from_stream(&self, path: FsPath, stream: DataStream) -> OperationCompleteFuture {

@@ -4,7 +4,7 @@ extern crate tempfile;
 #[macro_use]
 mod utils;
 pub mod read;
-//pub mod write;
+pub mod write;
 
 use std::fs::create_dir_all;
 use std::iter::empty;
@@ -143,23 +143,24 @@ macro_rules! build_tests {
             $cleanup
         );
         /*
-                make_test!(
-                    $backend,
-                    read,
-                    test_get_file_stream,
-                    $allow_incomplete,
-                    $setup,
-                    $cleanup
-                );
-
-                make_test!(
-                    $backend,
-                    write,
-                    test_delete_file,
-                    $allow_incomplete,
-                    $setup,
-                    $cleanup
-                );
+                        make_test!(
+                            $backend,
+                            read,
+                            test_get_file_stream,
+                            $allow_incomplete,
+                            $setup,
+                            $cleanup
+                        );
+        */
+        make_test!(
+            $backend,
+            write,
+            test_delete_file,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
+        /*
                 make_test!(
                     $backend,
                     write,
