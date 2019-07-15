@@ -25,11 +25,11 @@ script:
   - cargo fmt --all -- --check
 
 before_cache: |
-  if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
+  if [[ "$TRAVIS_RUST_VERSION" == "nightly" && "$TRAVIS_OS_NAME" == "linux" ]]; then
     cargo install cargo-tarpaulin -f
   fi
 
 after_success: |
-  if [[ "$TRAVIS_RUST_VERSION" == "stable" && "$TRAVIS_OS_NAME" == "linux" ]]; then
+  if [[ "$TRAVIS_RUST_VERSION" == "nightly" && "$TRAVIS_OS_NAME" == "linux" ]]; then
     cargo tarpaulin --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
   fi
