@@ -1,11 +1,10 @@
 extern crate cloud_fs;
 extern crate tempfile;
-extern crate tokio;
 
 #[macro_use]
 mod utils;
 pub mod read;
-pub mod write;
+//pub mod write;
 
 use std::fs::create_dir_all;
 use std::iter::empty;
@@ -15,6 +14,7 @@ use tempfile::{tempdir, TempDir};
 
 use utils::*;
 
+use cloud_fs::backends::Backend;
 use cloud_fs::*;
 
 pub struct TestContext {
@@ -38,13 +38,9 @@ impl TestContext {
     pub fn get_root(&self) -> PathBuf {
         self.root.clone()
     }
-
-    pub fn cleanup(self) -> FsResult<()> {
-        Ok(self.temp.close()?)
-    }
 }
 
-pub fn prepare_test() -> FsResult<TestContext> {
+pub fn prepare_test(backend: Backend) -> FsResult<TestContext> {
     let temp = tempdir()?;
 
     let mut dir = PathBuf::from(temp.path());
@@ -65,9 +61,11 @@ pub fn prepare_test() -> FsResult<TestContext> {
     write_file(&dir, "largefile", ContentIterator::new(0, 100 * MB))?;
     write_file(&dir, "mediumfile", ContentIterator::new(58, 5 * MB))?;
 
-    let mut em = dir.clone();
-    em.push("dir3");
-    create_dir_all(em)?;
+    if backend == Backend::File {
+        let mut em = dir.clone();
+        em.push("dir3");
+        create_dir_all(em)?;
+    }
 
     dir.push("dir2");
     create_dir_all(dir.clone())?;
@@ -84,62 +82,93 @@ pub fn prepare_test() -> FsResult<TestContext> {
 }
 
 macro_rules! make_test {
-    ($pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
+    ($backend:expr, $pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         #[test]
         fn $name() -> FsResult<()> {
-            let test_context = crate::runner::prepare_test()?;
-            let (fs_future, context) = $setup(&test_context)?;
-            let future = fs_future
-                .and_then(|fs| crate::runner::$pkg::$name(fs, test_context))
-                .then(move |r| {
-                    $cleanup(context);
-                    r
-                });
+            async fn runner(test_context: TestContext) -> FsResult<()> {
+                let (fs, backend_context) = $setup(&test_context).await?;
+                crate::runner::$pkg::$name(&fs, &test_context).await?;
+                $cleanup(backend_context).await;
+                Ok(())
+            }
 
-            match cloud_fs::utils::run_future(future) {
-                Ok(Ok((_, test_context))) => test_context.cleanup(),
-                Ok(Err(e)) => {
-                    if e.kind() == cloud_fs::FsErrorKind::NotImplemented {
+            let test_context = crate::runner::prepare_test($backend)?;
+
+            let result = cloud_fs::executor::run(Box::pin(runner(test_context)));
+
+            match result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => {
+                    if error.kind() == cloud_fs::FsErrorKind::NotImplemented {
                         if $allow_incomplete {
-                            eprintln!("Test attempts to use unimplemented feature: {}", e);
+                            eprintln!(
+                                "Test for {} attempts to use unimplemented feature: {}",
+                                $backend, error
+                            );
                             Ok(())
                         } else {
-                            panic!("Test attempts to use unimplemented feature: {}", e);
+                            panic!(
+                                "Test for {} attempts to use unimplemented feature: {}",
+                                $backend, error
+                            );
                         }
                     } else {
-                        panic!("{}", e);
+                        Err(error)
                     }
                 }
-                Err(e) => panic!(
-                    "{}::{} never completed: {}",
-                    stringify!($pkg),
-                    stringify!($name),
-                    e
-                ),
+                Err(_) => Err(cloud_fs::FsError::new(
+                    cloud_fs::FsErrorKind::TestFailure,
+                    "Failed to receive test result.",
+                )),
             }
         }
     };
 }
 
 macro_rules! build_tests {
-    ($name:expr, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
-        make_test!(read, test_list_files, $allow_incomplete, $setup, $cleanup);
-        make_test!(read, test_get_file, $allow_incomplete, $setup, $cleanup);
+    ($backend:expr, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         make_test!(
+            $backend,
             read,
-            test_get_file_stream,
+            test_list_files,
             $allow_incomplete,
             $setup,
             $cleanup
         );
+        /*
+                make_test!(
+                    $backend,
+                    read,
+                    test_get_file,
+                    $allow_incomplete,
+                    $setup,
+                    $cleanup
+                );
+                make_test!(
+                    $backend,
+                    read,
+                    test_get_file_stream,
+                    $allow_incomplete,
+                    $setup,
+                    $cleanup
+                );
 
-        make_test!(write, test_delete_file, $allow_incomplete, $setup, $cleanup);
-        make_test!(
-            write,
-            test_write_from_stream,
-            $allow_incomplete,
-            $setup,
-            $cleanup
-        );
+                make_test!(
+                    $backend,
+                    write,
+                    test_delete_file,
+                    $allow_incomplete,
+                    $setup,
+                    $cleanup
+                );
+                make_test!(
+                    $backend,
+                    write,
+                    test_write_from_stream,
+                    $allow_incomplete,
+                    $setup,
+                    $cleanup
+                );
+        */
     };
 }

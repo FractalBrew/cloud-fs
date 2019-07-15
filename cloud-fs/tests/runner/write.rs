@@ -1,8 +1,6 @@
 use std::fs::{metadata, File};
 use std::io::{BufReader, ErrorKind};
 
-use tokio::prelude::*;
-
 use super::utils::*;
 use super::TestContext;
 

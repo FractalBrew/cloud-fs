@@ -14,6 +14,7 @@
 //!
 //! The [`Fs`](struct.Fs.html) is the main API used to access storage.
 #![warn(missing_docs)]
+#![feature(async_await)]
 
 extern crate bytes;
 extern crate tokio;
@@ -21,18 +22,20 @@ extern crate tokio;
 pub mod backends;
 mod futures;
 mod types;
-pub mod utils;
+pub mod executor;
 
 use std::error::Error;
+use std::future::Future;
 
+use ::futures::stream::{Stream, StreamExt};
 use bytes::buf::FromBuf;
 use bytes::{Bytes, IntoBuf};
-use tokio::prelude::*;
 
+use crate::futures::*;
 use backends::connect;
 use backends::*;
-pub use futures::*;
-pub use types::{Data, FsError, FsErrorKind, FsFile, FsPath, FsResult, FsSettings};
+
+pub use types::{Address, Data, FsError, FsErrorKind, FsFile, FsPath, FsResult, FsSettings, Host};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
@@ -182,7 +185,7 @@ impl Fs {
     /// written.
     pub fn write_from_stream<S, I, E>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
     where
-        S: Stream<Item = I, Error = E> + Send + Sync + 'static,
+        S: Stream<Item = Result<I, E>> + Send + Sync + 'static,
         I: IntoBuf,
         E: Error,
     {
@@ -191,9 +194,10 @@ impl Fs {
         }
 
         #[allow(clippy::redundant_closure)]
-        let mapped = stream
-            .map(|i| Bytes::from_buf(i))
-            .map_err(|e| FsError::from_error(e));
+        let mapped = stream.map(|r| match r {
+            Ok(b) => Ok(Bytes::from_buf(b)),
+            Err(e) => Err(FsError::from_error(e)),
+        });
 
         self.backend
             .get()

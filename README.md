@@ -12,6 +12,5 @@ Aside from the code used to instantiate a backend (and even that is pretty simil
 The currently provided backends are:
 
 * FileBackend allows accessing files within a directory on the local computer.
-* B2Backend allows accessing files stored on Backblaze B2.
 
 It is possible to choose which backends are included in the library based on cargo features. The default is to include all backends and so in order to reduce the set you must disable the default features and then list all of the backends you want.

@@ -4,7 +4,7 @@ use std::cmp::{Ord, Ordering};
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use bytes::Bytes;
 
@@ -96,10 +96,45 @@ pub enum Host {
     Ipv6(Ipv6Addr),
 }
 
+impl fmt::Display for Host {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            any => any.fmt(f),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
-pub(crate) struct Address {
+pub struct Address {
     pub host: Host,
     pub port: Option<u16>,
+}
+
+impl fmt::Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.host.fmt(f)?;
+
+        if let Some(p) = self.port {
+            f.write_fmt(format_args!(":{}", p))?;
+        }
+
+        Ok(())
+    }
+}
+
+impl From<SocketAddr> for Address {
+    fn from(addr: SocketAddr) -> Address {
+        match addr {
+            SocketAddr::V4(addr4) => Address {
+                host: Host::Ipv4(addr4.ip().to_owned()),
+                port: Some(addr4.port()),
+            },
+            SocketAddr::V6(addr6) => Address {
+                host: Host::Ipv6(addr6.ip().to_owned()),
+                port: Some(addr6.port()),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -132,8 +167,11 @@ impl FsSettings {
     }
 
     /// Sets the address for the [`Fs`](struct.Fs.html).
-    pub fn set_address(&mut self, host: Host, port: Option<u16>) {
-        self.address = Some(Address { host, port });
+    pub fn set_address<A>(&mut self, address: A)
+    where
+        A: Into<Address>,
+    {
+        self.address = Some(address.into());
     }
 
     /// Sets the authentication information for the [`Fs`](struct.Fs.html).

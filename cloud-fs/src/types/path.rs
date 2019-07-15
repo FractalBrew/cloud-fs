@@ -1,6 +1,7 @@
 use std::cmp::min;
 use std::cmp::{Ord, Ordering};
 use std::fmt;
+use std::fs::metadata;
 use std::path::{Path, PathBuf};
 
 use crate::types::{FsError, FsErrorKind, FsResult};
@@ -194,8 +195,21 @@ impl FsPath {
 
     /// Creates a `FsPath` from a `Path` from std.
     pub fn from_std_path(path: &Path) -> FsResult<FsPath> {
+        let is_dir = if let Ok(m) = metadata(path) {
+            m.is_dir()
+        } else {
+            false
+        };
+
         if let Some(string) = path.to_str() {
-            FsPath::new(string)
+            let mut fspath = FsPath::new(string)?;
+            if is_dir {
+                if let Some(f) = fspath.filename.clone() {
+                    fspath.push_dir(&f);
+                }
+            }
+
+            Ok(fspath)
         } else {
             Err(FsError::new(
                 FsErrorKind::ParseError,

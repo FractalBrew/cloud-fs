@@ -1,15 +1,13 @@
 use std::iter::empty;
 
-use tokio::prelude::*;
-
 use super::utils::*;
 use super::*;
 
 use cloud_fs::*;
 
 fn compare_file(file: &FsFile, expected_path: &FsPath, expected_size: u64) -> FsResult<()> {
-    test_assert_eq!(file.path(), expected_path, "Should have the expected path.");
-    test_assert_eq!(
+    assert_eq!(file.path(), expected_path, "Should have the expected path.");
+    assert_eq!(
         file.size(),
         expected_size,
         "Should have the expected size for {}",
@@ -18,7 +16,15 @@ fn compare_file(file: &FsFile, expected_path: &FsPath, expected_size: u64) -> Fs
     Ok(())
 }
 
-pub fn test_list_files(
+pub async fn test_list_files(fs: &Fs, context: &TestContext) -> FsResult<()> {
+    /*async fn test_list(fs: &Fs, context: &TestContext, path: &str, mut files: Vec<(&'static str, u64)>) -> FsResult<()> {
+        Ok(())
+    }*/
+
+    Ok(())
+}
+
+/*pub fn test_list_gfiles(
     fs: Fs,
     context: TestContext,
 ) -> impl Future<Item = (Fs, TestContext), Error = FsError> {
@@ -205,3 +211,4 @@ pub fn test_get_file_stream(
     .and_then(|(fs, context)| test_fail(fs, context, "/daz"))
     .and_then(|(fs, context)| test_fail(fs, context, "/foo/bar"))
 }
+*/

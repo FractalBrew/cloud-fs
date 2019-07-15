@@ -11,7 +11,7 @@ use cloud_fs::Data;
 
 pub const MB: u64 = 1024 * 1024;
 
-macro_rules! test_fail {
+/*macro_rules! test_fail {
     ($message:expr) => {
         return Err(cloud_fs::FsError::new(
             cloud_fs::FsErrorKind::TestFailure,
@@ -83,7 +83,7 @@ macro_rules! test_assert_eq {
             ));
         }
     };
-}
+}*/
 
 pub struct IteratorStream<I>
 where
