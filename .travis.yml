@@ -11,14 +11,7 @@ addons:
       - libssl-dev
 
 rust:
-  - stable
-  - beta
   - nightly
-
-matrix:
-  allow_failures:
-    - rust: nightly
-  fast_finish: true
 
 cache: cargo
 
@@ -27,7 +20,7 @@ install:
   - rustup component add rustfmt
 
 script:
-  - cargo -q clippy --all --message-format short --tests -- -D warnings
+#  - cargo -q clippy --all --message-format short --tests -- -D warnings
   - cargo test --verbose --all
   - cargo fmt --all -- --check
 

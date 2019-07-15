@@ -15,8 +15,8 @@ use bytes::BytesMut;
 use tokio_fs::{metadata, read_dir, DirEntry};
 
 use super::BackendImplementation;
-use crate::types::{Data, FsFile, FsPath};
 use crate::futures::{stream_from_future, MergedStreams};
+use crate::types::{Data, FsFile, FsPath};
 use crate::*;
 
 // How many bytes to attempt to read from a file at a time.

@@ -20,9 +20,9 @@ extern crate bytes;
 extern crate tokio;
 
 pub mod backends;
+pub mod executor;
 mod futures;
 mod types;
-pub mod executor;
 
 use std::error::Error;
 use std::future::Future;
