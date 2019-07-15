@@ -134,15 +134,15 @@ macro_rules! build_tests {
             $setup,
             $cleanup
         );
+        make_test!(
+            $backend,
+            read,
+            test_get_file,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
         /*
-                make_test!(
-                    $backend,
-                    read,
-                    test_get_file,
-                    $allow_incomplete,
-                    $setup,
-                    $cleanup
-                );
                 make_test!(
                     $backend,
                     read,

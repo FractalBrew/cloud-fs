@@ -84,73 +84,37 @@ pub async fn test_list_files(fs: &Fs, _context: &TestContext) -> FsResult<()> {
     Ok(())
 }
 
-/*pub fn test_list_gfiles(
-    fs: Fs,
-    context: TestContext,
-) -> impl Future<Item = (Fs, TestContext), Error = FsError> {
-    fn test_list(
-        fs: Fs,
-        context: TestContext,
-        path: &str,
-        mut files: Vec<(&'static str, u64)>,
-    ) -> impl Future<Item = (Fs, TestContext), Error = FsError> {
-        fs.list_files(FsPath::new(path).unwrap())
-            .and_then(|s| s.collect())
-            .and_then(move |mut results| {
-                results.sort();
-                test_assert_eq!(
-                    results.len(),
-                    files.len(),
-                    "Should have seen the right number of results.",
-                );
+pub async fn test_get_file(fs: &Fs, _context: &TestContext) -> FsResult<()> {
+    async fn test_pass(fs: &Fs, path: &str, size: u64) -> FsResult<()> {
+        let expected_path = FsPath::new(path)?;
+        let file = fs.get_file(expected_path.clone()).await?;
+        compare_file(&file, &expected_path, size)?;
 
-                for _ in 0..files.len() {
-                    let result = results.remove(0);
-                    let (pathstr, size) = files.remove(0);
-                    compare_file(&result, &FsPath::new(pathstr)?, size)?;
-                }
-                Ok((fs, context))
-            })
+        Ok(())
     }
 
-    test_list(
-        fs,
-        context,
-        "/",
-        vec![
-            ("/largefile", 100 * MB),
-            ("/mediumfile", 5 * MB),
-            ("/smallfile.txt", 27),
-            ("/dir2/0foo", 0),
-            ("/dir2/1bar", 0),
-            ("/dir2/5diz", 0),
-            ("/dir2/bar", 0),
-            ("/dir2/daz", 300),
-            ("/dir2/foo", 0),
-            ("/dir2/hop", 0),
-            ("/dir2/yu", 0),
-        ],
-    )
-    .and_then(|(fs, context)| {
-        test_list(
-            fs,
-            context,
-            "/dir2/",
-            vec![
-                ("/dir2/0foo", 0),
-                ("/dir2/1bar", 0),
-                ("/dir2/5diz", 0),
-                ("/dir2/bar", 0),
-                ("/dir2/daz", 300),
-                ("/dir2/foo", 0),
-                ("/dir2/hop", 0),
-                ("/dir2/yu", 0),
-            ],
-        )
-    })
+    async fn test_fail(fs: &Fs, path: &str) -> FsResult<()> {
+        let result = fs.get_file(FsPath::new(path)?).await;
+        test_assert!(result.is_err());
+        if let Err(e) = result {
+            test_assert_eq!(e.kind(), FsErrorKind::NotFound);
+        }
+
+        Ok(())
+    }
+
+    test_pass(fs, "/largefile", 100 * MB).await?;
+    test_pass(fs, "/smallfile.txt", 27).await?;
+    test_pass(fs, "/dir2/0foo", 0).await?;
+    test_pass(fs, "/dir2/daz", 300).await?;
+    test_fail(fs, "/dir2").await?;
+    test_fail(fs, "/daz").await?;
+    test_fail(fs, "/foo/bar").await?;
+
+    Ok(())
 }
 
-pub fn test_get_file(
+/*pub fn test_get_file(
     fs: Fs,
     context: TestContext,
 ) -> impl Future<Item = (Fs, TestContext), Error = FsError> {

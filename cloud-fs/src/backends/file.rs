@@ -12,7 +12,7 @@ use ::futures::future::{BoxFuture, FutureExt};
 use ::futures::ready;
 use ::futures::stream::Stream;
 use bytes::BytesMut;
-use tokio_fs::{metadata, read_dir, DirEntry};
+use tokio_fs::{read_dir, symlink_metadata, DirEntry};
 
 use super::BackendImplementation;
 use crate::futures::{stream_from_future, MergedStreams};
@@ -130,7 +130,7 @@ impl MetadataFetcher {
         MetadataFetcher {
             path: entry.path(),
             space,
-            inner: Box::pin(metadata(entry.path()).compat()),
+            inner: Box::pin(symlink_metadata(entry.path()).compat()),
         }
     }
 }
@@ -360,7 +360,7 @@ impl FileBackend {
                 base: settings.path.clone(),
             };
             let path = space.get_std_path(&FsPath::new("/")?)?;
-            match metadata(path.clone()).compat().await {
+            match symlink_metadata(path.clone()).compat().await {
                 Ok(meta) => {
                     if !meta.is_dir() {
                         return Err(FsError::new(
@@ -393,28 +393,24 @@ impl FsImpl for FileBackend {
     }
 
     fn get_file(&self, path: FsPath) -> FileFuture {
-        unimplemented!();
-        /*
-                match self.space.get_std_path(&path) {
-                    Ok(target) => {
-                        let space = self.space.clone();
+        async fn get(path: FsPath, space: FileSpace) -> FsResult<FsFile> {
+            let file = space.get_std_path(&path)?;
+            let metadata = match symlink_metadata(file.clone()).compat().await {
+                Ok(m) => m,
+                Err(e) => return Err(space.get_fserror(e, &file)),
+            };
 
-                        FileFuture::from_future(FsPathInfo::fetch(&self.space, &target).and_then(
-                            move |(target, meta)| match meta {
-                                Some(m) => {
-                                    if m.is_file() {
-                                        space.get_fsfile(&target, m)
-                                    } else {
-                                        Err(space.not_found(&target))
-                                    }
-                                }
-                                None => Err(space.not_found(&target)),
-                            },
-                        ))
-                    }
-                    Err(error) => FileFuture::from_error(error),
-                }
-        */
+            if metadata.is_file() {
+                Ok(FsFile {
+                    path,
+                    size: metadata.len(),
+                })
+            } else {
+                Err(space.not_found(&file))
+            }
+        }
+
+        FileFuture::from_future(get(path, self.space.clone()))
     }
 
     fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
