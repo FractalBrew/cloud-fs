@@ -98,8 +98,8 @@ macro_rules! make_test {
 
             match result {
                 Ok(Ok(())) => Ok(()),
-                Ok(Err(error)) => {
-                    if error.kind() == cloud_fs::FsErrorKind::NotImplemented {
+                Ok(Err(error)) => match error.kind() {
+                    cloud_fs::FsErrorKind::NotImplemented => {
                         if $allow_incomplete {
                             eprintln!(
                                 "Test for {} attempts to use unimplemented feature: {}",
@@ -112,14 +112,13 @@ macro_rules! make_test {
                                 $backend, error
                             );
                         }
-                    } else {
-                        Err(error)
                     }
-                }
-                Err(_) => Err(cloud_fs::FsError::new(
-                    cloud_fs::FsErrorKind::TestFailure,
-                    "Failed to receive test result.",
-                )),
+                    cloud_fs::FsErrorKind::TestFailure => {
+                        panic!("{}", error);
+                    }
+                    _ => Err(error),
+                },
+                Err(_) => panic!("Failed to receive test result."),
             }
         }
     };

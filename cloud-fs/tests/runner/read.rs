@@ -1,13 +1,15 @@
 use std::iter::empty;
 
+use futures::stream::TryStreamExt;
+
 use super::utils::*;
 use super::*;
 
 use cloud_fs::*;
 
 fn compare_file(file: &FsFile, expected_path: &FsPath, expected_size: u64) -> FsResult<()> {
-    assert_eq!(file.path(), expected_path, "Should have the expected path.");
-    assert_eq!(
+    test_assert_eq!(file.path(), expected_path, "Should have the expected path.");
+    test_assert_eq!(
         file.size(),
         expected_size,
         "Should have the expected size for {}",
@@ -16,10 +18,68 @@ fn compare_file(file: &FsFile, expected_path: &FsPath, expected_size: u64) -> Fs
     Ok(())
 }
 
-pub async fn test_list_files(fs: &Fs, context: &TestContext) -> FsResult<()> {
-    /*async fn test_list(fs: &Fs, context: &TestContext, path: &str, mut files: Vec<(&'static str, u64)>) -> FsResult<()> {
+pub async fn test_list_files(fs: &Fs, _context: &TestContext) -> FsResult<()> {
+    async fn test_list<'a>(
+        fs: &'a Fs,
+        path: &'static str,
+        mut files: Vec<(&'static str, u64)>,
+    ) -> FsResult<()> {
+        let mut results = fs
+            .list_files(FsPath::new(path)?)
+            .await?
+            .try_collect::<Vec<FsFile>>()
+            .await?;
+        results.sort();
+
+        test_assert_eq!(
+            results.len(),
+            files.len(),
+            "Should have seen the right number of results.",
+        );
+
+        for _ in 0..files.len() {
+            let result = results.remove(0);
+            let (pathstr, size) = files.remove(0);
+            compare_file(&result, &FsPath::new(pathstr)?, size)?;
+        }
+
         Ok(())
-    }*/
+    }
+
+    test_list(
+        fs,
+        "/",
+        vec![
+            ("/largefile", 100 * MB),
+            ("/mediumfile", 5 * MB),
+            ("/smallfile.txt", 27),
+            ("/dir2/0foo", 0),
+            ("/dir2/1bar", 0),
+            ("/dir2/5diz", 0),
+            ("/dir2/bar", 0),
+            ("/dir2/daz", 300),
+            ("/dir2/foo", 0),
+            ("/dir2/hop", 0),
+            ("/dir2/yu", 0),
+        ],
+    )
+    .await?;
+
+    test_list(
+        fs,
+        "/dir2/",
+        vec![
+            ("/dir2/0foo", 0),
+            ("/dir2/1bar", 0),
+            ("/dir2/5diz", 0),
+            ("/dir2/bar", 0),
+            ("/dir2/daz", 300),
+            ("/dir2/foo", 0),
+            ("/dir2/hop", 0),
+            ("/dir2/yu", 0),
+        ],
+    )
+    .await?;
 
     Ok(())
 }
