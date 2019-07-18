@@ -164,11 +164,10 @@ impl Iterator for ContentIterator {
     }
 }
 
-pub fn write_file<I: IntoIterator<Item = u8>>(
-    dir: &PathBuf,
-    name: &str,
-    content: I,
-) -> TestResult<()> {
+pub fn write_file<I>(dir: &PathBuf, name: &str, content: I) -> TestResult<()>
+where
+    I: IntoIterator<Item = u8>,
+{
     let mut target = dir.clone();
     target.push(name);
 

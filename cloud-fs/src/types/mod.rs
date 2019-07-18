@@ -59,23 +59,23 @@ impl FsError {
         }
     }*/
 
-    pub(crate) fn invalid_path(path: &FsPath, description: &str) -> FsError {
+    pub(crate) fn invalid_path(path: FsPath, description: &str) -> FsError {
         FsError {
-            kind: FsErrorKind::InvalidPath(path.clone()),
             description: format!("Path '{}' was invalid: {}", path, description),
+            kind: FsErrorKind::InvalidPath(path),
         }
     }
 
-    pub(crate) fn not_found(path: &FsPath) -> FsError {
+    pub(crate) fn not_found(path: FsPath) -> FsError {
         FsError {
-            kind: FsErrorKind::NotFound(path.clone()),
             description: format!("File at '{}' was not found.", path),
+            kind: FsErrorKind::NotFound(path),
         }
     }
 
-    pub(crate) fn invalid_settings(settings: &FsSettings, description: &str) -> FsError {
+    pub(crate) fn invalid_settings(settings: FsSettings, description: &str) -> FsError {
         FsError {
-            kind: FsErrorKind::InvalidSettings(settings.to_owned()),
+            kind: FsErrorKind::InvalidSettings(settings),
             description: description.to_owned(),
         }
     }
@@ -258,8 +258,8 @@ pub struct FsFile {
 
 impl FsFile {
     /// Gets the file's path.
-    pub fn path(&self) -> &FsPath {
-        &self.path
+    pub fn path(&self) -> FsPath {
+        self.path.clone()
     }
 
     /// Gets the file's size.

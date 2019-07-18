@@ -163,7 +163,7 @@ impl<R> MergedStreams<R> {
     }
 }
 
-impl<R> ::futures::stream::Stream for MergedStreams<R> {
+impl<R> Stream for MergedStreams<R> {
     type Item = R;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<R>> {

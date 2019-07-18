@@ -22,7 +22,7 @@ fn compare_file(
 
     test_assert_eq!(
         file.path(),
-        &expected_path,
+        expected_path.clone(),
         "Should have the expected path."
     );
     test_assert_eq!(

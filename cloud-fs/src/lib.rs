@@ -79,22 +79,22 @@ impl Fs {
     fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
         if !path.is_absolute() {
             Err(FsError::invalid_path(
-                path,
+                path.clone(),
                 "Requests must use an absolute path.",
             ))
         } else if should_be_dir && !path.is_directory() {
             Err(FsError::invalid_path(
-                path,
+                path.clone(),
                 "This request requires the path to a directory.",
             ))
         } else if !should_be_dir && path.is_directory() {
             Err(FsError::invalid_path(
-                path,
+                path.clone(),
                 "This request requires the path to a file.",
             ))
         } else if path.is_windows() {
             Err(FsError::invalid_path(
-                path,
+                path.clone(),
                 "Paths should not include windows prefixes.",
             ))
         } else {
@@ -106,12 +106,12 @@ impl Fs {
     pub fn connect(settings: FsSettings) -> ConnectFuture {
         if !settings.path.is_absolute() {
             return ConnectFuture::from_error(FsError::invalid_settings(
-                &settings,
+                settings,
                 "Fs must be initialized with an absolute path.",
             ));
         } else if !settings.path.is_directory() {
             return ConnectFuture::from_error(FsError::invalid_settings(
-                &settings,
+                settings,
                 "Fs must be initialized with a directory path.",
             ));
         }
