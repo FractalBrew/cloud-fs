@@ -1,9 +1,10 @@
 use std::cmp::min;
 use std::cmp::{Ord, Ordering};
 use std::fmt;
+use std::fs::metadata;
 use std::path::{Path, PathBuf};
 
-use crate::types::{FsError, FsErrorKind, FsResult};
+use crate::types::{FsError, FsResult};
 
 const PARENT_DIR: &str = "..";
 const CURRENT_DIR: &str = ".";
@@ -38,8 +39,8 @@ impl Prefix {
             if path.starts_with("\\\\?\\UNC\\") {
                 let (server, next) = FsPath::find_separator(path, 8, false);
                 if next == path.len() {
-                    return Err(FsError::new(
-                        FsErrorKind::ParseError,
+                    return Err(FsError::parse_error(
+                        path,
                         "Incorrect format for verbatim UNC path.",
                     ));
                 }
@@ -52,11 +53,11 @@ impl Prefix {
                 if let Some(d) = path.bytes().nth(4) {
                     return Ok(Some((Prefix::VerbatimDisk(d), 6)));
                 } else {
-                    return Err(FsError::new(FsErrorKind::ParseError, "Unexpected failure."));
+                    return Err(FsError::parse_error(path, "Unexpected failure."));
                 }
             } else {
-                return Err(FsError::new(
-                    FsErrorKind::ParseError,
+                return Err(FsError::parse_error(
+                    path,
                     "Verbatim prefix did not match any supported form.",
                 ));
             }
@@ -194,11 +195,24 @@ impl FsPath {
 
     /// Creates a `FsPath` from a `Path` from std.
     pub fn from_std_path(path: &Path) -> FsResult<FsPath> {
-        if let Some(string) = path.to_str() {
-            FsPath::new(string)
+        let is_dir = if let Ok(m) = metadata(path) {
+            m.is_dir()
         } else {
-            Err(FsError::new(
-                FsErrorKind::ParseError,
+            false
+        };
+
+        if let Some(string) = path.to_str() {
+            let mut fspath = FsPath::new(string)?;
+            if is_dir {
+                if let Some(f) = fspath.filename.clone() {
+                    fspath.push_dir(&f);
+                }
+            }
+
+            Ok(fspath)
+        } else {
+            Err(FsError::parse_error(
+                &format!("{}", path.display()),
                 "Path was not valid utf8.",
             ))
         }
@@ -317,8 +331,8 @@ impl FsPath {
                         }
                     } else {
                         if self.is_absolute() {
-                            return Err(FsError::new(
-                                FsErrorKind::ParseError,
+                            return Err(FsError::parse_error(
+                                &format!("{}", self),
                                 "Cannot have remaining relative path parts in an absolute path.",
                             ));
                         }
@@ -341,14 +355,24 @@ impl FsPath {
     ///
     /// Both this `FsPath` and the target `FsPath` must be absolute.
     pub fn relative(&self, target: &FsPath) -> FsResult<FsPath> {
-        if !self.is_absolute || !target.is_absolute {
-            return Err(FsError::new(
-                FsErrorKind::ParseError,
-                "Can only generate a relative path between two absolute paths.",
+        if !self.is_absolute {
+            return Err(FsError::parse_error(
+                &format!("{}", self),
+                "Start path must be absolute when generating a relative path.",
+            ));
+        }
+        if !target.is_absolute {
+            return Err(FsError::parse_error(
+                &format!("{}", target),
+                "Final path must be absolute when generating a relative path.",
             ));
         }
         if self.prefix != target.prefix {
-            return Err(FsError::new(FsErrorKind::ParseError, "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+            if let Some(ref prefix) = target.prefix {
+                return Err(FsError::parse_error(&format!("{}", prefix), "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+            } else {
+                return Err(FsError::parse_error("<none>", "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+            }
         }
 
         self.assert_is_normalized();
@@ -399,12 +423,38 @@ impl FsPath {
         Ok(joined)
     }
 
+    /// Gets the filename for this `FsPath` if there is one.
+    pub fn filename(&self) -> Option<String> {
+        self.filename.clone()
+    }
+
     /// Moves this `FsPath` to the named subdirectory.
     ///
     /// This will throw away the filename from the path.
     pub fn push_dir(&mut self, dir: &str) {
         self.directories.push(dir.to_owned());
         self.filename = None;
+    }
+
+    /// Overwrites the filename for this `FsPath`.
+    pub fn set_filename(&mut self, filename: &str) {
+        self.filename = Some(filename.to_owned());
+    }
+
+    /// Converts this into a directory by moving the current filename into the
+    /// list of directories.
+    pub fn make_dir(&mut self) {
+        if let Some(name) = self.filename.take() {
+            self.push_dir(&name);
+        }
+    }
+
+    /// Converts this into a file by moving the last path item into the
+    /// filename.
+    pub fn make_file(&mut self) {
+        if self.filename.is_none() {
+            self.filename = self.directories.pop();
+        }
     }
 }
 
@@ -443,27 +493,10 @@ impl PartialOrd for FsPath {
 
 impl Ord for FsPath {
     fn cmp(&self, other: &FsPath) -> Ordering {
-        // This is a little fuzzy.
-        match self.prefix.cmp(&other.prefix) {
-            Ordering::Equal => (),
-            other => return other,
-        }
+        let selfp = format!("{}", self);
+        let otherp = format!("{}", other);
 
-        // Not really sure here either.
-        if self.is_absolute != other.is_absolute {
-            return if self.is_absolute {
-                Ordering::Greater
-            } else {
-                Ordering::Less
-            };
-        }
-
-        match self.directories.cmp(&other.directories) {
-            Ordering::Equal => (),
-            other => return other,
-        }
-
-        self.filename.cmp(&other.filename)
+        selfp.cmp(&otherp)
     }
 }
 
@@ -1232,6 +1265,52 @@ mod tests {
         assert!(!relative.is_directory());
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_dir() -> FsResult<()> {
+        fn test_into_dir(path: &str, expected: &str) -> FsResult<()> {
+            let mut file = FsPath::new(path)?;
+            file.make_dir();
+            assert_eq!(file.to_string(), expected);
+            Ok(())
+        }
+
+        test_into_dir("/", "/")?;
+        test_into_dir("", "")?;
+        test_into_dir("foo", "foo/")?;
+        test_into_dir("/foo", "/foo/")?;
+        test_into_dir("foo/", "foo/")?;
+        test_into_dir("/foo/", "/foo/")?;
+        test_into_dir("foo/bar", "foo/bar/")?;
+        test_into_dir("/foo/bar", "/foo/bar/")?;
+        test_into_dir("foo/bar/", "foo/bar/")?;
+        test_into_dir("/foo/bar/", "/foo/bar/")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_file() -> FsResult<()> {
+        fn test_into_file(path: &str, expected: &str) -> FsResult<()> {
+            let mut file = FsPath::new(path)?;
+            file.make_file();
+            assert_eq!(file.to_string(), expected);
+            Ok(())
+        }
+
+        test_into_file("/", "/")?;
+        test_into_file("", "")?;
+        test_into_file("foo", "foo")?;
+        test_into_file("/foo", "/foo")?;
+        test_into_file("foo/", "foo")?;
+        test_into_file("/foo/", "/foo")?;
+        test_into_file("foo/bar", "foo/bar")?;
+        test_into_file("/foo/bar", "/foo/bar")?;
+        test_into_file("foo/bar/", "foo/bar")?;
+        test_into_file("/foo/bar/", "/foo/bar")?;
 
         Ok(())
     }

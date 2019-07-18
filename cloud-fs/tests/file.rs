@@ -1,21 +1,21 @@
 #![cfg(feature = "file")]
+#![feature(async_await)]
+#![allow(clippy::needless_lifetimes)]
 
 extern crate cloud_fs;
 
 #[macro_use]
 mod runner;
 
-use tokio::prelude::Future;
-
 use cloud_fs::backends::Backend;
-use cloud_fs::{Fs, FsError, FsPath, FsResult, FsSettings};
+use cloud_fs::{Fs, FsPath, FsResult, FsSettings};
 use runner::TestContext;
 
-fn build_fs(context: &TestContext) -> FsResult<(impl Future<Item = Fs, Error = FsError>, ())> {
+async fn build_fs(context: &TestContext) -> FsResult<(Fs, ())> {
     let root = FsPath::new(format!("{}/", context.get_root().display()))?;
-    Ok((Fs::connect(FsSettings::new(Backend::File, root)), ()))
+    Ok((Fs::connect(FsSettings::new(Backend::File, root)).await?, ()))
 }
 
-fn cleanup(_: ()) {}
+async fn cleanup(_: ()) {}
 
-build_tests!("file", false, build_fs, cleanup);
+build_tests!(Backend::File, false, build_fs, cleanup);

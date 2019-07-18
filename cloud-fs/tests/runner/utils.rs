@@ -1,88 +1,88 @@
+use std::fs::File;
+use std::io::{BufWriter, Error, Write};
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use ::futures::stream::Stream;
+use bytes::{BufMut, BytesMut};
+
 use cloud_fs::*;
 
-use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
-
-use bytes::{BufMut, BytesMut};
-use tokio::prelude::*;
-
-use cloud_fs::Data;
+use super::{IntoTestResult, TestResult};
 
 pub const MB: u64 = 1024 * 1024;
 
 macro_rules! test_fail {
-    ($message:expr) => {
-        return Err(cloud_fs::FsError::new(
-            cloud_fs::FsErrorKind::TestFailure,
+    ($message:expr) => {{
+        return Err(crate::runner::TestError::TestFailure(
             format!("assertion failed at {}:{}: {}", file!(), line!(), $message)
         ));
-    };
-    ($($info:tt)*) => {
-        return Err(cloud_fs::FsError::new(
-            cloud_fs::FsErrorKind::TestFailure,
+    }};
+    ($($info:tt)*) => {{
+        return Err(crate::runner::TestError::TestFailure(
             format!("assertion failed at {}:{}: {}",
                 file!(), line!(), std::fmt::format(format_args!($($info)*)))
         ));
-    };
+    }};
 }
 
 macro_rules! test_assert {
-    ($check:expr) => {
+    ($check:expr) => {{
         if !$check {
-            return Err(cloud_fs::FsError::new(
-                cloud_fs::FsErrorKind::TestFailure,
+            return Err(crate::runner::TestError::TestFailure(
                 format!("assertion failed: `{}` at {}:{}", stringify!($check), file!(), line!()),
             ));
         }
-    };
-    ($check:expr, $message:expr) => {
+    }};
+    ($check:expr, $message:expr) => {{
         if !$check {
-            return Err(cloud_fs::FsError::new(
-                cloud_fs::FsErrorKind::TestFailure,
+            return Err(crate::runner::TestError::TestFailure(
                 format!("assertion failed: `{}` at {}:{}: {}", stringify!($check), file!(), line!(), $message)
             ));
         }
-    };
-    ($check:expr, $($info:tt)*) => {
+    }};
+    ($check:expr, $($info:tt)*) => {{
         if !$check {
-            return Err(cloud_fs::FsError::new(
-                cloud_fs::FsErrorKind::TestFailure,
+            return Err(crate::runner::TestError::TestFailure(
                 format!("assertion failed: `{}` at {}:{}: {}",
                     stringify!($check), file!(), line!(), std::fmt::format(format_args!($($info)*)))
             ));
         }
-    };
+    }};
 }
 
 macro_rules! test_assert_eq {
-    ($found:expr, $expected:expr) => {
-        if $found != $expected {
-            return Err(cloud_fs::FsError::new(
-                cloud_fs::FsErrorKind::TestFailure,
+    ($f:expr, $e:expr) => {{
+        let found = $f;
+        let expected = $e;
+        if found != expected {
+            return Err(crate::runner::TestError::TestFailure(
                 format!("assertion failed: `{} == {}` at {}:{}\n    found: `{:?}`\n expected: `{:?}`",
-                    stringify!($found), stringify!($expected), file!(), line!(), $found, $expected),
+                    stringify!($f), stringify!($e), file!(), line!(), found, expected),
             ));
         }
-    };
-    ($found:expr, $expected:expr, $message:expr) => {
-        if $found != $expected {
-            return Err(cloud_fs::FsError::new(
-                cloud_fs::FsErrorKind::TestFailure,
+    }};
+    ($f:expr, $e:expr, $message:expr) => {{
+        let found = $f;
+        let expected = $e;
+        if found != expected {
+            return Err(crate::runner::TestError::TestFailure(
                 format!("assertion failed: `{} == {}` at {}:{}: {}\n    found: `{:?}`\n expected: `{:?}`",
-                    stringify!($found), stringify!($expected), file!(), line!(), $message, $found, $expected),
+                    stringify!($f), stringify!($e), file!(), line!(), $message, found, expected),
             ));
         }
-    };
-    ($found:expr, $expected:expr, $($info:tt)*) => {
-        if $found != $expected {
-            return Err(cloud_fs::FsError::new(
-                cloud_fs::FsErrorKind::TestFailure,
+    }};
+    ($f:expr, $e:expr, $($info:tt)*) => {{
+        let found = $f;
+        let expected = $e;
+        if found != expected {
+            return Err(crate::runner::TestError::TestFailure(
                 format!("assertion failed: `{} == {}` at {}:{}: {}\n    found: `{:?}`\n expected: `{:?}`",
-                    stringify!($found), stringify!($expected), file!(), line!(), std::fmt::format(format_args!($($info)*)), $found, $expected),
+                    stringify!($f), stringify!($e), file!(), line!(), std::fmt::format(format_args!($($info)*)), found, expected),
             ));
         }
-    };
+    }};
 }
 
 pub struct IteratorStream<I>
@@ -105,12 +105,11 @@ where
 
 impl<I> Stream for IteratorStream<I>
 where
-    I: Iterator<Item = u8>,
+    I: Iterator<Item = u8> + Unpin,
 {
-    type Item = Data;
-    type Error = FsError;
+    type Item = Result<Data, Error>;
 
-    fn poll(&mut self) -> Poll<Option<Data>, FsError> {
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Result<Data, Error>>> {
         let mut buffer = BytesMut::with_capacity(self.buffer_size);
 
         while let Some(b) = self.iterator.next() {
@@ -121,9 +120,9 @@ where
         }
 
         if buffer.is_empty() {
-            Ok(Async::Ready(None))
+            Poll::Ready(None)
         } else {
-            Ok(Async::Ready(Some(buffer.freeze())))
+            Poll::Ready(Some(Ok(buffer.freeze())))
         }
     }
 }
@@ -165,26 +164,25 @@ impl Iterator for ContentIterator {
     }
 }
 
-pub fn write_file<I: IntoIterator<Item = u8>>(
-    dir: &PathBuf,
-    name: &str,
-    content: I,
-) -> FsResult<()> {
+pub fn write_file<I>(dir: &PathBuf, name: &str, content: I) -> TestResult<()>
+where
+    I: IntoIterator<Item = u8>,
+{
     let mut target = dir.clone();
     target.push(name);
 
-    let file = File::create(target)?;
+    let file = File::create(target).into_test_result()?;
     let mut writer = BufWriter::new(file);
 
     for b in content {
         loop {
-            if writer.write(&[b])? == 1 {
+            if writer.write(&[b]).into_test_result()? == 1 {
                 break;
             }
         }
     }
 
-    writer.flush()?;
+    writer.flush().into_test_result()?;
 
     Ok(())
 }

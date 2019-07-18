@@ -14,25 +14,28 @@
 //!
 //! The [`Fs`](struct.Fs.html) is the main API used to access storage.
 #![warn(missing_docs)]
+#![feature(async_await)]
 
 extern crate bytes;
 extern crate tokio;
 
 pub mod backends;
+pub mod executor;
 mod futures;
 mod types;
-pub mod utils;
 
-use std::error::Error;
+use std::future::Future;
+use std::io;
 
+use ::futures::stream::{StreamExt, TryStream, TryStreamExt};
 use bytes::buf::FromBuf;
 use bytes::{Bytes, IntoBuf};
-use tokio::prelude::*;
 
+use crate::futures::*;
 use backends::connect;
 use backends::*;
-pub use futures::*;
-pub use types::{Data, FsError, FsErrorKind, FsFile, FsPath, FsResult, FsSettings};
+
+pub use types::{Data, FsError, FsErrorKind, FsFile, FsFileType, FsPath, FsResult, FsSettings};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
@@ -59,7 +62,11 @@ trait FsImpl {
     /// Writes a stram of data the the file at the given path.
     ///
     /// See [Fs.get_file](struct.Fs.html#method.write_from_stream).
-    fn write_from_stream(&self, path: FsPath, stream: DataStream) -> OperationCompleteFuture;
+    fn write_from_stream(
+        &self,
+        path: FsPath,
+        stream: StreamHolder<Result<Bytes, io::Error>>,
+    ) -> OperationCompleteFuture;
 }
 
 /// The main implementation used to interact with a storage backend.
@@ -71,23 +78,23 @@ pub struct Fs {
 impl Fs {
     fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
         if !path.is_absolute() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
+            Err(FsError::invalid_path(
+                path.clone(),
                 "Requests must use an absolute path.",
             ))
         } else if should_be_dir && !path.is_directory() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
+            Err(FsError::invalid_path(
+                path.clone(),
                 "This request requires the path to a directory.",
             ))
         } else if !should_be_dir && path.is_directory() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
+            Err(FsError::invalid_path(
+                path.clone(),
                 "This request requires the path to a file.",
             ))
         } else if path.is_windows() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
+            Err(FsError::invalid_path(
+                path.clone(),
                 "Paths should not include windows prefixes.",
             ))
         } else {
@@ -98,13 +105,13 @@ impl Fs {
     /// Connect to a `Fs` based on the settings passed.
     pub fn connect(settings: FsSettings) -> ConnectFuture {
         if !settings.path.is_absolute() {
-            return ConnectFuture::from_error(FsError::new(
-                FsErrorKind::InvalidSettings,
+            return ConnectFuture::from_error(FsError::invalid_settings(
+                settings,
                 "Fs must be initialized with an absolute path.",
             ));
         } else if !settings.path.is_directory() {
-            return ConnectFuture::from_error(FsError::new(
-                FsErrorKind::InvalidSettings,
+            return ConnectFuture::from_error(FsError::invalid_settings(
+                settings,
                 "Fs must be initialized with a directory path.",
             ));
         }
@@ -164,6 +171,9 @@ impl Fs {
 
     /// Deletes the file at the given path.
     ///
+    /// For backends that support physical directories this will also delete the
+    /// directory and its contents.
+    ///
     /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
     /// error if the file does not exist.
     pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
@@ -174,29 +184,38 @@ impl Fs {
         self.backend.get().delete_file(path)
     }
 
-    /// Writes a stream of data the the file at the given path.
+    /// Writes a stream of data to the file at the given path.
+    ///
+    /// Calling this will overwrite anything at the given path (notably on
+    /// backends that support symlinks or directories those will be deleted
+    /// along with their contents and replaced with a file). The rationale for
+    /// this is that for network based backends not overwriting generally
+    /// involves more API calls to check if something is there first. If you
+    /// care about overwriting, call [`get_file`](struct.Fs.html#method.get_file)
+    /// first.
+    ///
+    /// If this operation fails there are no guarantees about the state of the
+    /// file. If that is an issue then you should consider always calling
+    /// [`delete_file`](struct.Fs.html#method.delete_file) after a failure.
     ///
     /// The future returned will only resolve once all the data from the stream
     /// is succesfully written to storage. If the provided stream resolves to
     /// None at any point this will be considered the end of the data to be
     /// written.
-    pub fn write_from_stream<S, I, E>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
+    pub fn write_from_stream<S, I>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
     where
-        S: Stream<Item = I, Error = E> + Send + Sync + 'static,
+        S: TryStream<Ok = I, Error = io::Error> + Send + 'static,
         I: IntoBuf,
-        E: Error,
     {
         if let Err(e) = self.check_path(&path, false) {
             return OperationCompleteFuture::from_error(e);
         }
 
         #[allow(clippy::redundant_closure)]
-        let mapped = stream
-            .map(|i| Bytes::from_buf(i))
-            .map_err(|e| FsError::from_error(e));
+        let mapped = stream.map_ok(|b| Bytes::from_buf(b));
 
         self.backend
             .get()
-            .write_from_stream(path, DataStream::from_stream(mapped))
+            .write_from_stream(path, StreamHolder::new(mapped))
     }
 }
