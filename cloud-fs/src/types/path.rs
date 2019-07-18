@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs::metadata;
 use std::path::{Path, PathBuf};
 
-use crate::types::{FsError, FsErrorKind, FsResult};
+use crate::types::{FsError, FsResult};
 
 const PARENT_DIR: &str = "..";
 const CURRENT_DIR: &str = ".";
@@ -39,10 +39,7 @@ impl Prefix {
             if path.starts_with("\\\\?\\UNC\\") {
                 let (server, next) = FsPath::find_separator(path, 8, false);
                 if next == path.len() {
-                    return Err(FsError::new(
-                        FsErrorKind::ParseError,
-                        "Incorrect format for verbatim UNC path.",
-                    ));
+                    return Err(FsError::parse_error(path, "Incorrect format for verbatim UNC path."));
                 }
                 let (share, last) = FsPath::find_separator(path, next + 1, false);
                 return Ok(Some((
@@ -53,11 +50,11 @@ impl Prefix {
                 if let Some(d) = path.bytes().nth(4) {
                     return Ok(Some((Prefix::VerbatimDisk(d), 6)));
                 } else {
-                    return Err(FsError::new(FsErrorKind::ParseError, "Unexpected failure."));
+                    return Err(FsError::parse_error(path, "Unexpected failure."));
                 }
             } else {
-                return Err(FsError::new(
-                    FsErrorKind::ParseError,
+                return Err(FsError::parse_error(
+                    path,
                     "Verbatim prefix did not match any supported form.",
                 ));
             }
@@ -211,8 +208,8 @@ impl FsPath {
 
             Ok(fspath)
         } else {
-            Err(FsError::new(
-                FsErrorKind::ParseError,
+            Err(FsError::parse_error(
+                &format!("{}", path.display()),
                 "Path was not valid utf8.",
             ))
         }
@@ -331,8 +328,8 @@ impl FsPath {
                         }
                     } else {
                         if self.is_absolute() {
-                            return Err(FsError::new(
-                                FsErrorKind::ParseError,
+                            return Err(FsError::parse_error(
+                                &format!("{}", self),
                                 "Cannot have remaining relative path parts in an absolute path.",
                             ));
                         }
@@ -355,14 +352,24 @@ impl FsPath {
     ///
     /// Both this `FsPath` and the target `FsPath` must be absolute.
     pub fn relative(&self, target: &FsPath) -> FsResult<FsPath> {
-        if !self.is_absolute || !target.is_absolute {
-            return Err(FsError::new(
-                FsErrorKind::ParseError,
-                "Can only generate a relative path between two absolute paths.",
+        if !self.is_absolute {
+            return Err(FsError::parse_error(
+                &format!("{}", self),
+                "Start path must be absolute when generating a relative path.",
+            ));
+        }
+        if !target.is_absolute {
+            return Err(FsError::parse_error(
+                &format!("{}", target),
+                "Final path must be absolute when generating a relative path.",
             ));
         }
         if self.prefix != target.prefix {
-            return Err(FsError::new(FsErrorKind::ParseError, "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+            if let Some(ref prefix) = target.prefix {
+                return Err(FsError::parse_error(&format!("{}", prefix), "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+            } else {
+                return Err(FsError::parse_error("<none>", "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+            }
         }
 
         self.assert_is_normalized();
@@ -419,6 +426,10 @@ impl FsPath {
     pub fn push_dir(&mut self, dir: &str) {
         self.directories.push(dir.to_owned());
         self.filename = None;
+    }
+
+    pub fn set_filename(&mut self, filename: &str) {
+        self.filename = Some(filename.to_owned());
     }
 }
 

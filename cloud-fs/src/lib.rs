@@ -24,7 +24,6 @@ pub mod executor;
 mod futures;
 mod types;
 
-use std::error::Error;
 use std::future::Future;
 
 use ::futures::stream::{Stream, StreamExt};
@@ -74,25 +73,13 @@ pub struct Fs {
 impl Fs {
     fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
         if !path.is_absolute() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
-                "Requests must use an absolute path.",
-            ))
+            Err(FsError::invalid_path(path, "Requests must use an absolute path."))
         } else if should_be_dir && !path.is_directory() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
-                "This request requires the path to a directory.",
-            ))
+            Err(FsError::invalid_path(path, "This request requires the path to a directory."))
         } else if !should_be_dir && path.is_directory() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
-                "This request requires the path to a file.",
-            ))
+            Err(FsError::invalid_path(path, "This request requires the path to a file."))
         } else if path.is_windows() {
-            Err(FsError::new(
-                FsErrorKind::InvalidPath,
-                "Paths should not include windows prefixes.",
-            ))
+            Err(FsError::invalid_path(path, "Paths should not include windows prefixes."))
         } else {
             Ok(())
         }
@@ -101,13 +88,13 @@ impl Fs {
     /// Connect to a `Fs` based on the settings passed.
     pub fn connect(settings: FsSettings) -> ConnectFuture {
         if !settings.path.is_absolute() {
-            return ConnectFuture::from_error(FsError::new(
-                FsErrorKind::InvalidSettings,
+            return ConnectFuture::from_error(FsError::invalid_settings(
+                &settings,
                 "Fs must be initialized with an absolute path.",
             ));
         } else if !settings.path.is_directory() {
-            return ConnectFuture::from_error(FsError::new(
-                FsErrorKind::InvalidSettings,
+            return ConnectFuture::from_error(FsError::invalid_settings(
+                &settings,
                 "Fs must be initialized with a directory path.",
             ));
         }
@@ -187,7 +174,7 @@ impl Fs {
     where
         S: Stream<Item = Result<I, E>> + Send + Sync + 'static,
         I: IntoBuf,
-        E: Error,
+        E: Into<FsError>,
     {
         if let Err(e) = self.check_path(&path, false) {
             return OperationCompleteFuture::from_error(e);
@@ -196,7 +183,7 @@ impl Fs {
         #[allow(clippy::redundant_closure)]
         let mapped = stream.map(|r| match r {
             Ok(b) => Ok(Bytes::from_buf(b)),
-            Err(e) => Err(FsError::from_error(e)),
+            Err(e) => Err(e.into()),
         });
 
         self.backend

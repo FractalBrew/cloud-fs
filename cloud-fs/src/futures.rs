@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -45,15 +44,11 @@ where
         FsFuture::from_future(ready(Ok(item)))
     }
 
-    pub(crate) fn from_error(error: FsError) -> Self {
-        FsFuture::from_future(ready(Err(error)))
-    }
-
-    pub(crate) fn from_any_error<E>(error: E) -> Self
+    pub(crate) fn from_error<E>(error: E) -> Self
     where
-        E: Error + fmt::Display,
+        E: Into<FsError>,
     {
-        FsFuture::from_error(FsError::from_error(error))
+        FsFuture::from_future(ready(Err(error.into())))
     }
 }
 

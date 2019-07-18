@@ -1,13 +1,13 @@
 use std::fs::{metadata, File};
 use std::io::{BufReader, ErrorKind};
 
+use super::*;
 use super::utils::*;
-use super::TestContext;
 
 use cloud_fs::*;
 
-pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> FsResult<()> {
-    async fn test_pass(fs: &Fs, context: &TestContext, path: &str) -> FsResult<()> {
+pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> TestResult<()> {
+    async fn test_pass(fs: &Fs, context: &TestContext, path: &str) -> TestResult<()> {
         let remote = FsPath::new(path)?;
         let target = context.get_target(&remote);
 
@@ -30,22 +30,22 @@ pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> FsResult<()> {
         Ok(())
     }
 
-    async fn test_fail(fs: &Fs, context: &TestContext, path: &str) -> FsResult<()> {
-        let remote = FsPath::new(path)?;
-        let target = context.get_target(&remote);
+    async fn test_fail(fs: &Fs, context: &TestContext, path: &str) -> TestResult<()> {
+        let fspath = FsPath::new(path)?;
+        let target = context.get_target(&fspath);
 
-        match fs.delete_file(remote.clone()).await {
-            Ok(()) => test_fail!("Should have failed to delete {}", remote),
+        match fs.delete_file(fspath.clone()).await {
+            Ok(()) => test_fail!("Should have failed to delete {}", fspath),
             Err(e) => test_assert_eq!(
                 e.kind(),
-                FsErrorKind::NotFound,
+                FsErrorKind::NotFound(fspath.clone()),
                 "The file {} should have not been found.",
-                remote
+                fspath
             ),
         }
 
         if let Ok(m) = metadata(target) {
-            test_assert!(m.is_dir(), "Shouldn't have deleted {}.", remote);
+            test_assert!(m.is_dir(), "Shouldn't have deleted {}.", fspath);
         }
 
         Ok(())
@@ -60,67 +60,7 @@ pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> FsResult<()> {
     Ok(())
 }
 
-/*pub fn test_delete_file(
-    fs: Fs,
-    context: TestContext,
-) -> impl Future<Item = (Fs, TestContext), Error = FsError> {
-    fn test_delete(
-        fs: Fs,
-        context: TestContext,
-        path: &str,
-    ) -> impl Future<Item = (Fs, TestContext), Error = FsError> {
-        let remote = FsPath::new(path).unwrap();
-        let target = context.get_target(&remote);
-
-        fs.delete_file(remote).and_then(move |_| {
-            match metadata(target.clone()) {
-                Ok(m) => {
-                    if m.is_file() {
-                        test_fail!("Failed to delete {}", target.display());
-                    }
-                }
-                Err(e) => test_assert_eq!(
-                    e.kind(),
-                    ErrorKind::NotFound,
-                    "Should have failed to find {}",
-                    target.display()
-                ),
-            }
-            Ok((fs, context))
-        })
-    }
-
-    fn test_fail(
-        fs: Fs,
-        context: TestContext,
-        path: &str,
-    ) -> impl Future<Item = (Fs, TestContext), Error = FsError> {
-        let remote = FsPath::new(path).unwrap();
-        let target = context.get_target(&remote);
-
-        fs.delete_file(remote.clone()).then(move |r| {
-            test_assert!(r.is_err(), "Should have failed to delete {}", remote);
-            if let Err(e) = r {
-                test_assert_eq!(e.kind(), FsErrorKind::NotFound);
-            }
-
-            if let Ok(m) = metadata(target.clone()) {
-                if !m.is_dir() {
-                    test_fail!("Shouldn't have deleted {}.", remote);
-                }
-            }
-
-            Ok((fs, context))
-        })
-    }
-
-    test_delete(fs, context, "/largefile")
-        .and_then(|(fs, context)| test_delete(fs, context, "/smallfile.txt"))
-        .and_then(|(fs, context)| test_delete(fs, context, "/dir2/daz"))
-        .and_then(|(fs, context)| test_fail(fs, context, "/biz"))
-        .and_then(|(fs, context)| test_fail(fs, context, "/dir2"))
-}
-
+/*
 pub fn test_write_from_stream(
     fs: Fs,
     context: TestContext,

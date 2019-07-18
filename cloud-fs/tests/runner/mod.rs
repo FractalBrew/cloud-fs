@@ -6,6 +6,7 @@ mod utils;
 pub mod read;
 pub mod write;
 
+use std::fmt;
 use std::fs::create_dir_all;
 use std::iter::empty;
 use std::path::PathBuf;
@@ -16,6 +17,57 @@ use utils::*;
 
 use cloud_fs::backends::Backend;
 use cloud_fs::*;
+
+pub type TestResult<I> = Result<I, TestError>;
+
+#[derive(Debug)]
+pub enum TestError {
+    Unexpected(FsError),
+    HarnessFailure(String),
+    TestFailure(String),
+    NotImplemented,
+}
+
+impl TestError {
+    fn from_error<E>(error: E) -> TestError
+    where
+        E: fmt::Display,
+    {
+        TestError::HarnessFailure(format!("{}", error))
+    }
+}
+
+impl fmt::Display for TestError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TestError::Unexpected(error) => {
+                f.write_fmt(format_args!("Unexpected FsError thrown: {}", error))
+            }
+            TestError::HarnessFailure(message) => f.write_str(message),
+            TestError::TestFailure(message) => f.write_str(message),
+            TestError::NotImplemented => f.write_str("Test attempts to use unimplemented feature."),
+        }
+    }
+}
+
+impl From<FsError> for TestError {
+    fn from(error: FsError) -> TestError {
+        TestError::Unexpected(error)
+    }
+}
+
+trait IntoTestResult<O> {
+    fn into_test_result(self) -> TestResult<O>;
+}
+
+impl<O, E> IntoTestResult<O> for Result<O, E>
+where
+    E: fmt::Display,
+{
+    fn into_test_result(self) -> TestResult<O> {
+        self.map_err(TestError::from_error)
+    }
+}
 
 pub struct TestContext {
     temp: TempDir,
@@ -40,13 +92,13 @@ impl TestContext {
     }
 }
 
-pub fn prepare_test(backend: Backend) -> FsResult<TestContext> {
-    let temp = tempdir()?;
+pub fn prepare_test(backend: Backend) -> TestResult<TestContext> {
+    let temp = tempdir().into_test_result()?;
 
     let mut dir = PathBuf::from(temp.path());
     dir.push("test1");
     dir.push("dir1");
-    create_dir_all(dir.clone())?;
+    create_dir_all(dir.clone()).into_test_result()?;
 
     let context = TestContext {
         temp,
@@ -64,11 +116,11 @@ pub fn prepare_test(backend: Backend) -> FsResult<TestContext> {
     if backend == Backend::File {
         let mut em = dir.clone();
         em.push("dir3");
-        create_dir_all(em)?;
+        create_dir_all(em).into_test_result()?;
     }
 
     dir.push("dir2");
-    create_dir_all(dir.clone())?;
+    create_dir_all(dir.clone()).into_test_result()?;
     write_file(&dir, "foo", empty())?;
     write_file(&dir, "bar", empty())?;
     write_file(&dir, "0foo", empty())?;
@@ -84,41 +136,30 @@ pub fn prepare_test(backend: Backend) -> FsResult<TestContext> {
 macro_rules! make_test {
     ($backend:expr, $pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         #[test]
-        fn $name() -> FsResult<()> {
-            async fn runner(test_context: TestContext) -> FsResult<()> {
+        fn $name() {
+            async fn test() -> crate::runner::TestResult<()> {
+                let test_context = crate::runner::prepare_test($backend)?;
                 let (fs, backend_context) = $setup(&test_context).await?;
                 crate::runner::$pkg::$name(&fs, &test_context).await?;
                 $cleanup(backend_context).await;
                 Ok(())
             }
 
-            let test_context = crate::runner::prepare_test($backend)?;
-
-            let result = cloud_fs::executor::run(Box::pin(runner(test_context)));
+            let result = cloud_fs::executor::run(Box::pin(test()));
 
             match result {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(error)) => match error.kind() {
-                    cloud_fs::FsErrorKind::NotImplemented => {
+                Ok(Ok(())) => (),
+                Ok(Err(error)) => match error {
+                    crate::runner::TestError::NotImplemented => {
                         if $allow_incomplete {
-                            eprintln!(
-                                "Test for {} attempts to use unimplemented feature: {}",
-                                $backend, error
-                            );
-                            Ok(())
+                            eprintln!("{}", error)
                         } else {
-                            panic!(
-                                "Test for {} attempts to use unimplemented feature: {}",
-                                $backend, error
-                            );
+                            panic!("{}", error)
                         }
                     }
-                    cloud_fs::FsErrorKind::TestFailure => {
-                        panic!("{}", error);
-                    }
-                    _ => Err(error),
+                    _ => panic!("{}", error),
                 },
-                Err(_) => panic!("Failed to receive test result."),
+                Err(_e) => panic!("Failed to receive test result."),
             }
         }
     };
@@ -142,16 +183,14 @@ macro_rules! build_tests {
             $setup,
             $cleanup
         );
-        /*
-                        make_test!(
-                            $backend,
-                            read,
-                            test_get_file_stream,
-                            $allow_incomplete,
-                            $setup,
-                            $cleanup
-                        );
-        */
+        make_test!(
+            $backend,
+            read,
+            test_get_file_stream,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
         make_test!(
             $backend,
             write,

@@ -8,12 +8,12 @@
 use std::future::Future;
 use std::sync::mpsc;
 
-use ::futures::compat::{Compat, Future01CompatExt};
+use ::futures::compat::{Compat};
 use ::futures::future::FutureExt;
-use tokio_sync::oneshot;
+use futures::channel::oneshot;
 
 /// Runs a future on the existing runtime.
-pub fn spawn<F>(future: F) -> impl Future<Output = Result<F::Output, oneshot::error::RecvError>>
+pub fn spawn<F>(future: F) -> impl Future<Output = Result<F::Output, oneshot::Canceled>>
 where
     F: Future + Send + Unpin + 'static,
     F::Output: Send,
@@ -27,7 +27,7 @@ where
 
     tokio::executor::spawn(compat);
 
-    receiver.compat()
+    receiver
 }
 
 /// Runs a future to completion on a new tokio executor and returns the result.

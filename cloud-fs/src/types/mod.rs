@@ -3,7 +3,6 @@ mod path;
 use std::cmp::{Ord, Ordering};
 use std::error::Error;
 use std::fmt;
-use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use bytes::Bytes;
@@ -15,27 +14,24 @@ pub use path::FsPath;
 pub type Data = Bytes;
 
 /// The type of an [`FsError`](struct.FsError.html).
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum FsErrorKind {
-    /// An error that occuring while parsing or manipulating a
+    /// An error that occuring while parsing or manipulating an
     /// [`FsPath`](struct.FsPath.html].
-    ParseError,
+    ParseError(String),
+
     /// An error a backend may return if an invalid storage host was requested.
-    HostNotSupported,
-    /// An error returns when attempting to access an invalid path.
-    InvalidPath,
+    AddressNotSupported(Address),
+    /// An error returned when attempting to access an invalid path.
+    InvalidPath(FsPath),
     /// The item requested was not found.
-    NotFound,
-    /// An error returns if the [`FsSettings`](struct.FsSettings.html) is
+    NotFound(FsPath),
+    /// An error returned if the [`FsSettings`](struct.FsSettings.html) is
     /// invalid in some way.
-    InvalidSettings,
-    /// An error used internally to mark a test failure.
-    TestFailure,
-    /// An error indicating that the requested function is not yet implemented.
-    NotImplemented,
+    InvalidSettings(FsSettings),
     /// An unknown error type, usually a marker that this `FsError` was
     /// generated from a different error type.
-    Other,
+    Unknown,
 }
 
 /// The main error type used throughout this crate.
@@ -46,29 +42,54 @@ pub struct FsError {
 }
 
 impl FsError {
-    /// Creates a new `FsError` instance
-    pub fn new<S: AsRef<str>>(kind: FsErrorKind, description: S) -> FsError {
+    pub(crate) fn parse_error(source: &str, description: &str) -> FsError {
         FsError {
-            kind,
-            description: description.as_ref().to_owned(),
+            kind: FsErrorKind::ParseError(source.to_owned()),
+            description: format!("Failed while parsing '{}': {}", source, description.to_owned()),
         }
     }
 
-    /// Creates a new `FsError` out of some other kind of `Error`.
-    pub fn from_error<E>(error: E) -> FsError
+    pub(crate) fn address_not_supported(address: &Address, description: &str) -> FsError {
+        FsError {
+            kind: FsErrorKind::AddressNotSupported(address.clone()),
+            description: description.to_owned(),
+        }
+    }
+
+    pub(crate) fn invalid_path(path: &FsPath, description: &str) -> FsError {
+        FsError {
+            kind: FsErrorKind::InvalidPath(path.clone()),
+            description: format!("Path '{}' was invalid: {}", path, description),
+        }
+    }
+
+    pub(crate) fn not_found(path: &FsPath) -> FsError {
+        FsError {
+            kind: FsErrorKind::NotFound(path.clone()),
+            description: format!("File at '{}' was not found.", path),
+        }
+    }
+
+    pub(crate) fn invalid_settings(settings: &FsSettings, description: &str) -> FsError {
+        FsError {
+            kind: FsErrorKind::InvalidSettings(settings.to_owned()),
+            description: description.to_owned(),
+        }
+    }
+
+    pub(crate) fn unknown<E>(error: E) -> FsError
     where
-        E: Error + fmt::Display,
+        E: Error,
     {
-        Self::new(FsErrorKind::Other, format!("{}", error))
+        FsError {
+            kind: FsErrorKind::Unknown,
+            description: format!("{}", error),
+        }
     }
 
     /// Gets the [`FsErrorKind`](enum.FsErrorKind.html) of this `FsError`.
     pub fn kind(&self) -> FsErrorKind {
-        self.kind
-    }
-
-    pub(crate) fn not_found(path: &FsPath) -> FsError {
-        FsError::new(FsErrorKind::NotFound, format!("{} does not exist.", path))
+        self.kind.clone()
     }
 }
 
@@ -80,16 +101,10 @@ impl fmt::Display for FsError {
 
 impl Error for FsError {}
 
-impl From<io::Error> for FsError {
-    fn from(e: io::Error) -> FsError {
-        FsError::from_error(e)
-    }
-}
-
 /// A simple alias for a `Result` where the error is an [`FsError`](struct.FsError.html).
 pub type FsResult<R> = Result<R, FsError>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Host {
     Name(String),
     Ipv4(Ipv4Addr),
@@ -99,12 +114,14 @@ pub enum Host {
 impl fmt::Display for Host {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            any => any.fmt(f),
+            Host::Name(addr) => addr.fmt(f),
+            Host::Ipv4(addr) => addr.fmt(f),
+            Host::Ipv6(addr) => addr.fmt(f),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Address {
     pub host: Host,
     pub port: Option<u16>,
@@ -137,7 +154,7 @@ impl From<SocketAddr> for Address {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Auth {
     pub username: String,
     pub password: String,
@@ -147,7 +164,7 @@ pub(crate) struct Auth {
 ///
 /// Different backends may interpret these settings in different ways. Check
 /// the [`backends`](backends/index.html) for specific details.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FsSettings {
     pub(crate) backend: Backend,
     pub(crate) address: Option<Address>,
