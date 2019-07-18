@@ -8,7 +8,7 @@
 use std::future::Future;
 use std::sync::mpsc;
 
-use ::futures::compat::{Compat};
+use ::futures::compat::Compat;
 use ::futures::future::FutureExt;
 use futures::channel::oneshot;
 

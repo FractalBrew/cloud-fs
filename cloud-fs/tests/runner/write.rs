@@ -1,8 +1,8 @@
 use std::fs::{metadata, File};
 use std::io::{BufReader, ErrorKind};
 
-use super::*;
 use super::utils::*;
+use super::*;
 
 use cloud_fs::*;
 

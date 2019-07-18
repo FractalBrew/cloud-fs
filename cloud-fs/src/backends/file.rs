@@ -8,14 +8,14 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use ::futures::compat::*;
-use ::futures::future::{ready, TryFutureExt, BoxFuture, FutureExt};
+use ::futures::future::{ready, BoxFuture, FutureExt, TryFutureExt};
 use ::futures::ready;
-use ::futures::stream::{BoxStream, once, TryStreamExt, Stream};
+use ::futures::stream::{once, BoxStream, Stream, TryStreamExt};
 use bytes::BytesMut;
-use tokio_fs::{read_dir, remove_file, symlink_metadata, DirEntry, File};
+use tokio::io::AsyncRead as TokioAsyncRead;
 use tokio::prelude::stream::Stream as TokioStream;
 use tokio::prelude::Async as TokioAsync;
-use tokio::io::AsyncRead as TokioAsyncRead;
+use tokio_fs::{read_dir, remove_file, symlink_metadata, DirEntry, File};
 
 use super::BackendImplementation;
 use crate::futures::{stream_from_future, MergedStreams};
@@ -105,28 +105,47 @@ impl FileSpace {
     }
 }
 
-fn directory_stream(path: &FsPath, space: FileSpace) -> impl Stream<Item = FsResult<(FsPath, Metadata)>> {
-    async fn build_base(path: FsPath, space: FileSpace) -> FsResult<impl Stream<Item = FsResult<DirEntry>>> {
+fn directory_stream(
+    path: &FsPath,
+    space: FileSpace,
+) -> impl Stream<Item = FsResult<(FsPath, Metadata)>> {
+    async fn build_base(
+        path: FsPath,
+        space: FileSpace,
+    ) -> FsResult<impl Stream<Item = FsResult<DirEntry>>> {
         let target = space.get_std_path(&path)?;
-        Ok(wrap_stream(wrap_future(read_dir(target.clone()).compat(), &path).await?.compat(), &path))
+        Ok(wrap_stream(
+            wrap_future(read_dir(target.clone()).compat(), &path)
+                .await?
+                .compat(),
+            &path,
+        ))
     }
 
-    async fn start_stream(path: FsPath, space: FileSpace) -> impl Stream<Item = FsResult<(FsPath, Metadata)>> {
+    async fn start_stream(
+        path: FsPath,
+        space: FileSpace,
+    ) -> impl Stream<Item = FsResult<(FsPath, Metadata)>> {
         let stream = match build_base(path.clone(), space.clone()).await {
             Ok(s) => s,
             Err(e) => return once(ready::<FsResult<(FsPath, Metadata)>>(Err(e))).left_stream(),
         };
 
-        stream.and_then(move |direntry| {
-            let fname = direntry.file_name();
-            let path = path.clone();
-            wrap_future(symlink_metadata(direntry.path()).compat(), &path.clone())
-                .map(move |result| {
-                    match result {
+        stream
+            .and_then(move |direntry| {
+                let fname = direntry.file_name();
+                let path = path.clone();
+                wrap_future(symlink_metadata(direntry.path()).compat(), &path.clone()).map(
+                    move |result| match result {
                         Ok(metadata) => {
                             let filename = match fname.into_string() {
                                 Ok(f) => f,
-                                Err(_) => return Err(FsError::parse_error("", "Unable to convert OSString.")),
+                                Err(_) => {
+                                    return Err(FsError::parse_error(
+                                        "",
+                                        "Unable to convert OSString.",
+                                    ))
+                                }
                             };
 
                             let mut found = path.clone();
@@ -136,11 +155,12 @@ fn directory_stream(path: &FsPath, space: FileSpace) -> impl Stream<Item = FsRes
                                 found.set_filename(&filename);
                             }
                             Ok((found, metadata))
-                        },
+                        }
                         Err(e) => Err(e),
-                    }
-                })
-        }).right_stream()
+                    },
+                )
+            })
+            .right_stream()
     }
 
     start_stream(path.clone(), space).flatten_stream()
@@ -163,7 +183,8 @@ impl FileLister {
     }
 
     fn add_directory(&mut self, path: FsPath) {
-        self.stream.push(directory_stream(&path, self.space.clone()));
+        self.stream
+            .push(directory_stream(&path, self.space.clone()));
     }
 }
 
@@ -182,7 +203,7 @@ impl Stream for FileLister {
                     } else if metadata.is_dir() {
                         self.add_directory(path);
                     }
-                },
+                }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
@@ -292,23 +313,27 @@ impl FileBackend {
                 base: settings.path.clone(),
             };
             let target = space.get_std_path(&FsPath::new("/")?)?;
-            symlink_metadata(target).compat().map(|r| {
-                match r {
+            symlink_metadata(target)
+                .compat()
+                .map(|r| match r {
                     Ok(meta) => {
                         if !meta.is_dir() {
-                            Err(FsError::invalid_path(&settings.path, "Path setting was not a directory."))
+                            Err(FsError::invalid_path(
+                                &settings.path,
+                                "Path setting was not a directory.",
+                            ))
                         } else {
                             Ok(Fs {
-                                backend: BackendImplementation::File(FileBackend { space, settings }),
+                                backend: BackendImplementation::File(FileBackend {
+                                    space,
+                                    settings,
+                                }),
                             })
                         }
-                    },
-                    Err(e) => {
-                        Err(get_fserror(e, &settings.path))
                     }
-                }
-            })
-            .await
+                    Err(e) => Err(get_fserror(e, &settings.path)),
+                })
+                .await
         })
     }
 }
@@ -316,10 +341,7 @@ impl FileBackend {
 impl FsImpl for FileBackend {
     fn list_files(&self, path: FsPath) -> FileListFuture {
         async fn list(path: FsPath, space: FileSpace) -> FsResult<FileListStream> {
-            Ok(FileListStream::from_stream(FileLister::list(
-                space,
-                path,
-            )))
+            Ok(FileListStream::from_stream(FileLister::list(space, path)))
         }
 
         FileListFuture::from_future(list(path, self.space.clone()))
@@ -352,7 +374,7 @@ impl FsImpl for FileBackend {
 
             let metadata = wrap_future(symlink_metadata(target.clone()).compat(), &path).await?;
             if !metadata.is_file() {
-                return Err(FsError::not_found(&path))
+                return Err(FsError::not_found(&path));
             }
 
             let file = wrap_future(File::open(target.clone()).compat(), &path).await?;

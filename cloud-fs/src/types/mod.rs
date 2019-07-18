@@ -45,7 +45,11 @@ impl FsError {
     pub(crate) fn parse_error(source: &str, description: &str) -> FsError {
         FsError {
             kind: FsErrorKind::ParseError(source.to_owned()),
-            description: format!("Failed while parsing '{}': {}", source, description.to_owned()),
+            description: format!(
+                "Failed while parsing '{}': {}",
+                source,
+                description.to_owned()
+            ),
         }
     }
 

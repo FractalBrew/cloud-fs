@@ -39,7 +39,10 @@ impl Prefix {
             if path.starts_with("\\\\?\\UNC\\") {
                 let (server, next) = FsPath::find_separator(path, 8, false);
                 if next == path.len() {
-                    return Err(FsError::parse_error(path, "Incorrect format for verbatim UNC path."));
+                    return Err(FsError::parse_error(
+                        path,
+                        "Incorrect format for verbatim UNC path.",
+                    ));
                 }
                 let (share, last) = FsPath::find_separator(path, next + 1, false);
                 return Ok(Some((

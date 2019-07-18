@@ -73,13 +73,25 @@ pub struct Fs {
 impl Fs {
     fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
         if !path.is_absolute() {
-            Err(FsError::invalid_path(path, "Requests must use an absolute path."))
+            Err(FsError::invalid_path(
+                path,
+                "Requests must use an absolute path.",
+            ))
         } else if should_be_dir && !path.is_directory() {
-            Err(FsError::invalid_path(path, "This request requires the path to a directory."))
+            Err(FsError::invalid_path(
+                path,
+                "This request requires the path to a directory.",
+            ))
         } else if !should_be_dir && path.is_directory() {
-            Err(FsError::invalid_path(path, "This request requires the path to a file."))
+            Err(FsError::invalid_path(
+                path,
+                "This request requires the path to a file.",
+            ))
         } else if path.is_windows() {
-            Err(FsError::invalid_path(path, "Paths should not include windows prefixes."))
+            Err(FsError::invalid_path(
+                path,
+                "Paths should not include windows prefixes.",
+            ))
         } else {
             Ok(())
         }
