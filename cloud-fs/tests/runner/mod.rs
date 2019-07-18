@@ -22,10 +22,9 @@ pub type TestResult<I> = Result<I, TestError>;
 
 #[derive(Debug)]
 pub enum TestError {
-    Unexpected(FsError),
+    Unexpected(Box<FsError>),
     HarnessFailure(String),
     TestFailure(String),
-    NotImplemented,
 }
 
 impl TestError {
@@ -45,14 +44,13 @@ impl fmt::Display for TestError {
             }
             TestError::HarnessFailure(message) => f.write_str(message),
             TestError::TestFailure(message) => f.write_str(message),
-            TestError::NotImplemented => f.write_str("Test attempts to use unimplemented feature."),
         }
     }
 }
 
 impl From<FsError> for TestError {
     fn from(error: FsError) -> TestError {
-        TestError::Unexpected(error)
+        TestError::Unexpected(Box::new(error))
     }
 }
 
@@ -70,13 +68,13 @@ where
 }
 
 pub struct TestContext {
-    temp: TempDir,
+    _temp: TempDir,
     root: PathBuf,
 }
 
 impl TestContext {
     pub fn get_target(&self, path: &FsPath) -> PathBuf {
-        let mut target = self.root.clone();
+        let mut target = self.get_root();
         target.push(
             FsPath::new("/")
                 .unwrap()
@@ -92,6 +90,34 @@ impl TestContext {
     }
 }
 
+/// Creates a filesystem used for testing.
+///
+/// The filesystem looks like this:
+///
+/// ```
+/// test1/dir1/smallfile.txt
+/// test1/dir1/largefile
+/// test1/dir1/mediumfile
+/// test1/dir2/foo
+/// test1/dir2/bar
+/// test1/dir2/0foo
+/// test1/dir2/5diz
+/// test1/dir2/1bar
+/// test1/dir2/daz
+/// test1/dir2/hop
+/// test1/dir2/yu
+///
+/// For File backend only:
+///
+/// test1/dir3/
+///
+/// Created by write tests:
+///
+/// test1/foobar
+/// test1/dir3
+/// test1/dir2/daz
+///
+/// ```
 pub fn prepare_test(backend: Backend) -> TestResult<TestContext> {
     let temp = tempdir().into_test_result()?;
 
@@ -101,7 +127,7 @@ pub fn prepare_test(backend: Backend) -> TestResult<TestContext> {
     create_dir_all(dir.clone()).into_test_result()?;
 
     let context = TestContext {
-        temp,
+        _temp: temp,
         root: dir.clone(),
     };
 
@@ -115,8 +141,18 @@ pub fn prepare_test(backend: Backend) -> TestResult<TestContext> {
 
     if backend == Backend::File {
         let mut em = dir.clone();
-        em.push("dir3");
-        create_dir_all(em).into_test_result()?;
+        em.push("maybedir");
+        create_dir_all(&em).into_test_result()?;
+        write_file(&em, "foo", empty())?;
+        write_file(&em, "bar", empty())?;
+        write_file(&em, "baz", empty())?;
+
+        em.push("foobar");
+        create_dir_all(&em).into_test_result()?;
+        write_file(&em, "foo", empty())?;
+        write_file(&em, "bar", empty())?;
+    } else {
+        write_file(&dir, "maybedir", empty())?;
     }
 
     dir.push("dir2");
@@ -149,16 +185,7 @@ macro_rules! make_test {
 
             match result {
                 Ok(Ok(())) => (),
-                Ok(Err(error)) => match error {
-                    crate::runner::TestError::NotImplemented => {
-                        if $allow_incomplete {
-                            eprintln!("{}", error)
-                        } else {
-                            panic!("{}", error)
-                        }
-                    }
-                    _ => panic!("{}", error),
-                },
+                Ok(Err(error)) => panic!("{}", error),
                 Err(_e) => panic!("Failed to receive test result."),
             }
         }
@@ -199,15 +226,13 @@ macro_rules! build_tests {
             $setup,
             $cleanup
         );
-        /*
-                make_test!(
-                    $backend,
-                    write,
-                    test_write_from_stream,
-                    $allow_incomplete,
-                    $setup,
-                    $cleanup
-                );
-        */
+        make_test!(
+            $backend,
+            write,
+            test_write_from_stream,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
     };
 }

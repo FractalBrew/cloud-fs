@@ -25,8 +25,9 @@ mod futures;
 mod types;
 
 use std::future::Future;
+use std::io;
 
-use ::futures::stream::{Stream, StreamExt};
+use ::futures::stream::{StreamExt, TryStream, TryStreamExt};
 use bytes::buf::FromBuf;
 use bytes::{Bytes, IntoBuf};
 
@@ -34,7 +35,7 @@ use crate::futures::*;
 use backends::connect;
 use backends::*;
 
-pub use types::{Address, Data, FsError, FsErrorKind, FsFile, FsPath, FsResult, FsSettings, Host};
+pub use types::{Data, FsError, FsErrorKind, FsFile, FsFileType, FsPath, FsResult, FsSettings};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
@@ -61,7 +62,11 @@ trait FsImpl {
     /// Writes a stram of data the the file at the given path.
     ///
     /// See [Fs.get_file](struct.Fs.html#method.write_from_stream).
-    fn write_from_stream(&self, path: FsPath, stream: DataStream) -> OperationCompleteFuture;
+    fn write_from_stream(
+        &self,
+        path: FsPath,
+        stream: StreamHolder<Result<Bytes, io::Error>>,
+    ) -> OperationCompleteFuture;
 }
 
 /// The main implementation used to interact with a storage backend.
@@ -166,6 +171,9 @@ impl Fs {
 
     /// Deletes the file at the given path.
     ///
+    /// For backends that support physical directories this will also delete the
+    /// directory and its contents.
+    ///
     /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
     /// error if the file does not exist.
     pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
@@ -176,30 +184,38 @@ impl Fs {
         self.backend.get().delete_file(path)
     }
 
-    /// Writes a stream of data the the file at the given path.
+    /// Writes a stream of data to the file at the given path.
+    ///
+    /// Calling this will overwrite anything at the given path (notably on
+    /// backends that support symlinks or directories those will be deleted
+    /// along with their contents and replaced with a file). The rationale for
+    /// this is that for network based backends not overwriting generally
+    /// involves more API calls to check if something is there first. If you
+    /// care about overwriting, call [`get_file`](struct.Fs.html#method.get_file)
+    /// first.
+    ///
+    /// If this operation fails there are no guarantees about the state of the
+    /// file. If that is an issue then you should consider always calling
+    /// [`delete_file`](struct.Fs.html#method.delete_file) after a failure.
     ///
     /// The future returned will only resolve once all the data from the stream
     /// is succesfully written to storage. If the provided stream resolves to
     /// None at any point this will be considered the end of the data to be
     /// written.
-    pub fn write_from_stream<S, I, E>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
+    pub fn write_from_stream<S, I>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
     where
-        S: Stream<Item = Result<I, E>> + Send + Sync + 'static,
+        S: TryStream<Ok = I, Error = io::Error> + Send + 'static,
         I: IntoBuf,
-        E: Into<FsError>,
     {
         if let Err(e) = self.check_path(&path, false) {
             return OperationCompleteFuture::from_error(e);
         }
 
         #[allow(clippy::redundant_closure)]
-        let mapped = stream.map(|r| match r {
-            Ok(b) => Ok(Bytes::from_buf(b)),
-            Err(e) => Err(e.into()),
-        });
+        let mapped = stream.map_ok(|b| Bytes::from_buf(b));
 
         self.backend
             .get()
-            .write_from_stream(path, DataStream::from_stream(mapped))
+            .write_from_stream(path, StreamHolder::new(mapped))
     }
 }

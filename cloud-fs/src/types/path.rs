@@ -423,6 +423,11 @@ impl FsPath {
         Ok(joined)
     }
 
+    /// Gets the filename for this `FsPath` if there is one.
+    pub fn filename(&self) -> Option<String> {
+        self.filename.clone()
+    }
+
     /// Moves this `FsPath` to the named subdirectory.
     ///
     /// This will throw away the filename from the path.
@@ -431,8 +436,25 @@ impl FsPath {
         self.filename = None;
     }
 
+    /// Overwrites the filename for this `FsPath`.
     pub fn set_filename(&mut self, filename: &str) {
         self.filename = Some(filename.to_owned());
+    }
+
+    /// Converts this into a directory by moving the current filename into the
+    /// list of directories.
+    pub fn make_dir(&mut self) {
+        if let Some(name) = self.filename.take() {
+            self.push_dir(&name);
+        }
+    }
+
+    /// Converts this into a file by moving the last path item into the
+    /// filename.
+    pub fn make_file(&mut self) {
+        if self.filename.is_none() {
+            self.filename = self.directories.pop();
+        }
     }
 }
 
@@ -471,27 +493,10 @@ impl PartialOrd for FsPath {
 
 impl Ord for FsPath {
     fn cmp(&self, other: &FsPath) -> Ordering {
-        // This is a little fuzzy.
-        match self.prefix.cmp(&other.prefix) {
-            Ordering::Equal => (),
-            other => return other,
-        }
+        let selfp = format!("{}", self);
+        let otherp = format!("{}", other);
 
-        // Not really sure here either.
-        if self.is_absolute != other.is_absolute {
-            return if self.is_absolute {
-                Ordering::Greater
-            } else {
-                Ordering::Less
-            };
-        }
-
-        match self.directories.cmp(&other.directories) {
-            Ordering::Equal => (),
-            other => return other,
-        }
-
-        self.filename.cmp(&other.filename)
+        selfp.cmp(&otherp)
     }
 }
 
@@ -1260,6 +1265,52 @@ mod tests {
         assert!(!relative.is_directory());
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_dir() -> FsResult<()> {
+        fn test_into_dir(path: &str, expected: &str) -> FsResult<()> {
+            let mut file = FsPath::new(path)?;
+            file.make_dir();
+            assert_eq!(file.to_string(), expected);
+            Ok(())
+        }
+
+        test_into_dir("/", "/")?;
+        test_into_dir("", "")?;
+        test_into_dir("foo", "foo/")?;
+        test_into_dir("/foo", "/foo/")?;
+        test_into_dir("foo/", "foo/")?;
+        test_into_dir("/foo/", "/foo/")?;
+        test_into_dir("foo/bar", "foo/bar/")?;
+        test_into_dir("/foo/bar", "/foo/bar/")?;
+        test_into_dir("foo/bar/", "foo/bar/")?;
+        test_into_dir("/foo/bar/", "/foo/bar/")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_file() -> FsResult<()> {
+        fn test_into_file(path: &str, expected: &str) -> FsResult<()> {
+            let mut file = FsPath::new(path)?;
+            file.make_file();
+            assert_eq!(file.to_string(), expected);
+            Ok(())
+        }
+
+        test_into_file("/", "/")?;
+        test_into_file("", "")?;
+        test_into_file("foo", "foo")?;
+        test_into_file("/foo", "/foo")?;
+        test_into_file("foo/", "foo")?;
+        test_into_file("/foo/", "/foo")?;
+        test_into_file("foo/bar", "foo/bar")?;
+        test_into_file("/foo/bar", "/foo/bar")?;
+        test_into_file("foo/bar/", "foo/bar")?;
+        test_into_file("/foo/bar/", "/foo/bar")?;
 
         Ok(())
     }

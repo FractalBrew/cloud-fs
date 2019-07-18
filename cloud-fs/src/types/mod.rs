@@ -3,7 +3,6 @@ mod path;
 use std::cmp::{Ord, Ordering};
 use std::error::Error;
 use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use bytes::Bytes;
 
@@ -21,7 +20,7 @@ pub enum FsErrorKind {
     ParseError(String),
 
     /// An error a backend may return if an invalid storage host was requested.
-    AddressNotSupported(Address),
+    //AddressNotSupported(Address),
     /// An error returned when attempting to access an invalid path.
     InvalidPath(FsPath),
     /// The item requested was not found.
@@ -53,12 +52,12 @@ impl FsError {
         }
     }
 
-    pub(crate) fn address_not_supported(address: &Address, description: &str) -> FsError {
+    /*pub(crate) fn address_not_supported(address: &Address, description: &str) -> FsError {
         FsError {
             kind: FsErrorKind::AddressNotSupported(address.clone()),
             description: description.to_owned(),
         }
-    }
+    }*/
 
     pub(crate) fn invalid_path(path: &FsPath, description: &str) -> FsError {
         FsError {
@@ -108,6 +107,7 @@ impl Error for FsError {}
 /// A simple alias for a `Result` where the error is an [`FsError`](struct.FsError.html).
 pub type FsResult<R> = Result<R, FsError>;
 
+/*
 #[derive(Clone, Debug, PartialEq)]
 pub enum Host {
     Name(String),
@@ -163,7 +163,7 @@ pub(crate) struct Auth {
     pub username: String,
     pub password: String,
 }
-
+*/
 /// Settings used to create an [`Fs`](struct.Fs.html) instance.
 ///
 /// Different backends may interpret these settings in different ways. Check
@@ -171,8 +171,8 @@ pub(crate) struct Auth {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FsSettings {
     pub(crate) backend: Backend,
-    pub(crate) address: Option<Address>,
-    pub(crate) auth: Option<Auth>,
+    //pub(crate) address: Option<Address>,
+    //pub(crate) auth: Option<Auth>,
     pub(crate) path: FsPath,
 }
 
@@ -181,12 +181,13 @@ impl FsSettings {
     pub fn new(backend: Backend, path: FsPath) -> FsSettings {
         FsSettings {
             backend,
-            address: None,
-            auth: None,
+            //address: None,
+            //auth: None,
             path,
         }
     }
 
+    /*
     /// Sets the address for the [`Fs`](struct.Fs.html).
     pub fn set_address<A>(&mut self, address: A)
     where
@@ -201,7 +202,7 @@ impl FsSettings {
             username: username.to_owned(),
             password: password.to_owned(),
         });
-    }
+    }*/
 
     /// Gets this setting's current [`Backend`](backends/enum.Backend.html).
     pub fn backend(&self) -> &Backend {
@@ -209,9 +210,48 @@ impl FsSettings {
     }
 }
 
+/// A file's type. For most backends this will just be File.
+///
+/// This crate really only deals with file manipulations and most backends only
+/// support regular files and things like directories don't really exist.
+/// In some cases though some backends do have real directories and would not
+/// support creating a file of the same name. This gives the type of the file.
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum FsFileType {
+    /// A regular file.
+    File,
+    /// A physical directory.
+    Directory,
+    /// An physical object of unknown type.
+    Unknown,
+}
+
+impl Eq for FsFileType {}
+
+impl PartialOrd for FsFileType {
+    fn partial_cmp(&self, other: &FsFileType) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FsFileType {
+    fn cmp(&self, other: &FsFileType) -> Ordering {
+        if self == other {
+            return Ordering::Equal;
+        }
+
+        match self {
+            FsFileType::Directory => Ordering::Less,
+            FsFileType::File => other.cmp(self),
+            FsFileType::Unknown => Ordering::Greater,
+        }
+    }
+}
+
 /// A file in storage.
 #[derive(Clone, PartialEq, Debug)]
 pub struct FsFile {
+    pub(crate) file_type: FsFileType,
     pub(crate) path: FsPath,
     pub(crate) size: u64,
 }
@@ -225,6 +265,11 @@ impl FsFile {
     /// Gets the file's size.
     pub fn size(&self) -> u64 {
         self.size
+    }
+
+    /// Gets the file's type.
+    pub fn file_type(&self) -> FsFileType {
+        self.file_type
     }
 }
 

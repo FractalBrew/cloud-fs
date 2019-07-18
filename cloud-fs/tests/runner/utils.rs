@@ -1,13 +1,13 @@
-use cloud_fs::*;
-
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Error, Write};
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
+use ::futures::stream::Stream;
 use bytes::{BufMut, BytesMut};
-use tokio::prelude::*;
 
-use cloud_fs::Data;
+use cloud_fs::*;
 
 use super::{IntoTestResult, TestResult};
 
@@ -105,12 +105,11 @@ where
 
 impl<I> Stream for IteratorStream<I>
 where
-    I: Iterator<Item = u8>,
+    I: Iterator<Item = u8> + Unpin,
 {
-    type Item = Data;
-    type Error = FsError;
+    type Item = Result<Data, Error>;
 
-    fn poll(&mut self) -> Poll<Option<Data>, FsError> {
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Result<Data, Error>>> {
         let mut buffer = BytesMut::with_capacity(self.buffer_size);
 
         while let Some(b) = self.iterator.next() {
@@ -121,9 +120,9 @@ where
         }
 
         if buffer.is_empty() {
-            Ok(Async::Ready(None))
+            Poll::Ready(None)
         } else {
-            Ok(Async::Ready(Some(buffer.freeze())))
+            Poll::Ready(Some(Ok(buffer.freeze())))
         }
     }
 }

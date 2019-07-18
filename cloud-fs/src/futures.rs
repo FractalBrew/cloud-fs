@@ -1,10 +1,8 @@
-use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::ready;
-use futures::ready;
 use futures::stream::{BoxStream, Stream};
 
 use crate::types::*;
@@ -38,10 +36,6 @@ where
         FsFuture {
             base: Box::pin(base),
         }
-    }
-
-    pub(crate) fn from_item(item: R) -> Self {
-        FsFuture::from_future(ready(Ok(item)))
     }
 
     pub(crate) fn from_error<E>(error: E) -> Self
@@ -140,63 +134,6 @@ impl<R> Stream for StreamHolder<R> {
     }
 }
 
-enum FutureOrStream<F, S>
-where
-    F: Future,
-    S: Stream,
-{
-    Future(Pin<Box<F>>),
-    Stream(Pin<Box<S>>),
-}
-
-/// Converts a `Future` that returns a stream into a stream.
-///
-/// Polling the stream first polls the future and then once resolved polls the
-/// returned stream.
-pub struct FutureStream<F, S, I, E>
-where
-    F: Future<Output = Result<S, E>>,
-    S: Stream<Item = Result<I, E>>,
-{
-    current: FutureOrStream<F, S>,
-}
-
-impl<F, S, I, E> Stream for FutureStream<F, S, I, E>
-where
-    F: Future<Output = Result<S, E>>,
-    S: Stream<Item = Result<I, E>>,
-{
-    type Item = Result<I, E>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Result<I, E>>> {
-        match self.current {
-            FutureOrStream::Future(ref mut future) => match ready!(future.as_mut().poll(cx)) {
-                Ok(stream) => {
-                    let mut pinned = Box::pin(stream);
-                    let result = pinned.as_mut().poll_next(cx);
-                    self.current = FutureOrStream::Stream(pinned);
-                    result
-                }
-                Err(e) => Poll::Ready(Some(Err(e))),
-            },
-            FutureOrStream::Stream(ref mut stream) => stream.as_mut().poll_next(cx),
-        }
-    }
-}
-
-/// Converts a `Future` that returns a stream into a stream. See [FutureStream](#struct.FutureStream)
-/// for more details.
-pub fn stream_from_future<F, S, I, E>(future: F) -> FutureStream<F, S, I, E>
-where
-    F: Future<Output = Result<S, E>>,
-    S: Stream<Item = Result<I, E>>,
-    E: Error,
-{
-    FutureStream {
-        current: FutureOrStream::Future(Box::pin(future)),
-    }
-}
-
 /// Merges a set of streams into a single stream that returns results whenever
 /// they arrive, not necessarily in the order the streams were added.
 ///
@@ -215,16 +152,6 @@ impl<R> MergedStreams<R> {
         MergedStreams {
             streams: Vec::new(),
         }
-    }
-
-    /// Returns a new MergedStreams using the initial stream given.
-    pub fn start<S>(stream: S) -> MergedStreams<S::Item>
-    where
-        S: Stream + Send + 'static,
-    {
-        let mut merged = MergedStreams::new();
-        merged.push(stream);
-        merged
     }
 
     /// Adds a new stream to the set of streams polled.
