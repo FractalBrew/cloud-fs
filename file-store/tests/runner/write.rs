@@ -38,7 +38,7 @@ pub async fn test_delete_file(fs: &FileStore, context: &TestContext) -> TestResu
             Ok(()) => test_fail!("Should have failed to delete {}", fspath),
             Err(e) => test_assert_eq!(
                 e.kind(),
-                FsErrorKind::NotFound(fspath.clone()),
+                StorageErrorKind::NotFound(fspath.clone()),
                 "The file {} should have not been found.",
                 fspath
             ),

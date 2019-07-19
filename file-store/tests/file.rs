@@ -8,10 +8,10 @@ extern crate file_store;
 mod runner;
 
 use file_store::backends::{Backend, FileBackend};
-use file_store::{FileStore, FsResult};
+use file_store::{FileStore, StorageResult};
 use runner::TestContext;
 
-async fn build_fs(context: &TestContext) -> FsResult<(FileStore, ())> {
+async fn build_fs(context: &TestContext) -> StorageResult<(FileStore, ())> {
     Ok((FileBackend::connect(&context.get_root()).await?, ()))
 }
 

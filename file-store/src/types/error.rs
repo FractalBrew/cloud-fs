@@ -3,9 +3,9 @@ use std::fmt;
 
 use super::*;
 
-/// The type of an [`FsError`](struct.FsError.html).
+/// The type of a [`StorageError`](struct.StorageError.html).
 #[derive(Clone, Debug, PartialEq)]
-pub enum FsErrorKind {
+pub enum StorageErrorKind {
     /// An error that occuring while parsing or manipulating a
     /// [`StoragePath`](struct.StoragePath.html].
     ParseError(String),
@@ -18,22 +18,22 @@ pub enum FsErrorKind {
     NotFound(StoragePath),
     /// An error returned if configuration for a backend was invalid somehow.
     InvalidSettings,
-    /// An unknown error type, usually a marker that this `FsError` was
+    /// An unknown error type, usually a marker that this `StorageError` was
     /// generated from a different error type.
     Unknown,
 }
 
 /// The main error type used throughout this crate.
 #[derive(Clone, Debug)]
-pub struct FsError {
-    kind: FsErrorKind,
+pub struct StorageError {
+    kind: StorageErrorKind,
     description: String,
 }
 
-impl FsError {
-    pub(crate) fn parse_error(source: &str, description: &str) -> FsError {
-        FsError {
-            kind: FsErrorKind::ParseError(source.to_owned()),
+impl StorageError {
+    pub(crate) fn parse_error(source: &str, description: &str) -> StorageError {
+        StorageError {
+            kind: StorageErrorKind::ParseError(source.to_owned()),
             description: format!(
                 "Failed while parsing '{}': {}",
                 source,
@@ -42,57 +42,57 @@ impl FsError {
         }
     }
 
-    /*pub(crate) fn address_not_supported(address: &Address, description: &str) -> FsError {
-        FsError {
-            kind: FsErrorKind::AddressNotSupported(address.clone()),
+    /*pub(crate) fn address_not_supported(address: &Address, description: &str) -> StorageError {
+        StorageError {
+            kind: StorageErrorKind::AddressNotSupported(address.clone()),
             description: description.to_owned(),
         }
     }*/
 
-    pub(crate) fn invalid_path(path: StoragePath, description: &str) -> FsError {
-        FsError {
+    pub(crate) fn invalid_path(path: StoragePath, description: &str) -> StorageError {
+        StorageError {
             description: format!("Path '{}' was invalid: {}", path, description),
-            kind: FsErrorKind::InvalidPath(path),
+            kind: StorageErrorKind::InvalidPath(path),
         }
     }
 
-    pub(crate) fn not_found(path: StoragePath) -> FsError {
-        FsError {
+    pub(crate) fn not_found(path: StoragePath) -> StorageError {
+        StorageError {
             description: format!("File at '{}' was not found.", path),
-            kind: FsErrorKind::NotFound(path),
+            kind: StorageErrorKind::NotFound(path),
         }
     }
 
-    pub(crate) fn invalid_settings(description: &str) -> FsError {
-        FsError {
-            kind: FsErrorKind::InvalidSettings,
+    pub(crate) fn invalid_settings(description: &str) -> StorageError {
+        StorageError {
+            kind: StorageErrorKind::InvalidSettings,
             description: description.to_owned(),
         }
     }
 
-    pub(crate) fn unknown<E>(error: E) -> FsError
+    pub(crate) fn unknown<E>(error: E) -> StorageError
     where
         E: Error,
     {
-        FsError {
-            kind: FsErrorKind::Unknown,
+        StorageError {
+            kind: StorageErrorKind::Unknown,
             description: format!("{}", error),
         }
     }
 
-    /// Gets the [`FsErrorKind`](enum.FsErrorKind.html) of this `FsError`.
-    pub fn kind(&self) -> FsErrorKind {
+    /// Gets the [`StorageErrorKind`](enum.StorageErrorKind.html) of this `StorageError`.
+    pub fn kind(&self) -> StorageErrorKind {
         self.kind.clone()
     }
 }
 
-impl fmt::Display for FsError {
+impl fmt::Display for StorageError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.write_str(&self.description)
     }
 }
 
-impl Error for FsError {}
+impl Error for StorageError {}
 
-/// A simple alias for a `Result` where the error is an [`FsError`](struct.FsError.html).
-pub type FsResult<R> = Result<R, FsError>;
+/// A simple alias for a `Result` where the error is a [`StorageError`](struct.StorageError.html).
+pub type StorageResult<R> = Result<R, StorageError>;

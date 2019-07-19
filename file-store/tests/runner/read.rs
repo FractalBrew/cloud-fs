@@ -140,7 +140,7 @@ pub async fn test_get_file(fs: &FileStore, _context: &TestContext) -> TestResult
         if let Err(e) = result {
             test_assert_eq!(
                 e.kind(),
-                FsErrorKind::NotFound(fspath),
+                StorageErrorKind::NotFound(fspath),
                 "Should have returned a NotFound error."
             );
         }
@@ -220,7 +220,7 @@ pub async fn test_get_file_stream(fs: &FileStore, context: &TestContext) -> Test
         let result = fs.get_file_stream(target.clone()).await;
         test_assert!(result.is_err());
         if let Err(e) = result {
-            test_assert_eq!(e.kind(), FsErrorKind::NotFound(target));
+            test_assert_eq!(e.kind(), StorageErrorKind::NotFound(target));
         }
 
         Ok(())

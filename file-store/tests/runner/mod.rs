@@ -21,7 +21,7 @@ pub type TestResult<I> = Result<I, TestError>;
 
 #[derive(Debug)]
 pub enum TestError {
-    Unexpected(Box<FsError>),
+    Unexpected(Box<StorageError>),
     HarnessFailure(String),
     TestFailure(String),
 }
@@ -39,7 +39,7 @@ impl fmt::Display for TestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TestError::Unexpected(error) => {
-                f.write_fmt(format_args!("Unexpected FsError thrown: {}", error))
+                f.write_fmt(format_args!("Unexpected StorageError thrown: {}", error))
             }
             TestError::HarnessFailure(message) => f.write_str(message),
             TestError::TestFailure(message) => f.write_str(message),
@@ -47,8 +47,8 @@ impl fmt::Display for TestError {
     }
 }
 
-impl From<FsError> for TestError {
-    fn from(error: FsError) -> TestError {
+impl From<StorageError> for TestError {
+    fn from(error: StorageError) -> TestError {
         TestError::Unexpected(Box::new(error))
     }
 }

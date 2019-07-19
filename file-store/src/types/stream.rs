@@ -8,7 +8,7 @@ use futures::stream::Stream;
 use super::*;
 
 pub(crate) type StreamPoll<R> = Poll<Option<R>>;
-pub(crate) type ResultStreamPoll<R> = StreamPoll<FsResult<R>>;
+pub(crate) type ResultStreamPoll<R> = StreamPoll<StorageResult<R>>;
 
 pub(crate) type PinnedStream<R> = Pin<Box<dyn Stream<Item = R> + Send + 'static>>;
 

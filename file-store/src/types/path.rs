@@ -32,7 +32,7 @@ impl Prefix {
         }
     }
 
-    fn try_parse(path: &str) -> FsResult<Option<(Prefix, usize)>> {
+    fn try_parse(path: &str) -> StorageResult<Option<(Prefix, usize)>> {
         if path.len() < 3 {
             return Ok(None);
         }
@@ -41,7 +41,7 @@ impl Prefix {
             if path.starts_with("\\\\?\\UNC\\") {
                 let (server, next) = StoragePath::find_separator(path, 8, false);
                 if next == path.len() {
-                    return Err(FsError::parse_error(
+                    return Err(StorageError::parse_error(
                         path,
                         "Incorrect format for verbatim UNC path.",
                     ));
@@ -55,10 +55,10 @@ impl Prefix {
                 if let Some(d) = path.bytes().nth(4) {
                     return Ok(Some((Prefix::VerbatimDisk(d), 6)));
                 } else {
-                    return Err(FsError::parse_error(path, "Unexpected failure."));
+                    return Err(StorageError::parse_error(path, "Unexpected failure."));
                 }
             } else {
-                return Err(FsError::parse_error(
+                return Err(StorageError::parse_error(
                     path,
                     "Verbatim prefix did not match any supported form.",
                 ));
@@ -196,7 +196,7 @@ impl StoragePath {
     }
 
     /// Creates a `StoragePath` from a `Path` from std.
-    pub fn from_std_path(path: &Path) -> FsResult<StoragePath> {
+    pub fn from_std_path(path: &Path) -> StorageResult<StoragePath> {
         let is_dir = if let Ok(m) = metadata(path) {
             m.is_dir()
         } else {
@@ -213,7 +213,7 @@ impl StoragePath {
 
             Ok(fspath)
         } else {
-            Err(FsError::parse_error(
+            Err(StorageError::parse_error(
                 &format!("{}", path.display()),
                 "Path was not valid utf8.",
             ))
@@ -230,7 +230,7 @@ impl StoragePath {
     }
 
     /// Parses a string into a new `StoragePath`.
-    pub fn new<S: AsRef<str>>(from: S) -> FsResult<StoragePath> {
+    pub fn new<S: AsRef<str>>(from: S) -> StorageResult<StoragePath> {
         let path = from.as_ref();
         let mut pos: usize = 0;
         let mut result: StoragePath = Default::default();
@@ -315,7 +315,7 @@ impl StoragePath {
         }
     }
 
-    fn normalize(&mut self) -> FsResult<()> {
+    fn normalize(&mut self) -> StorageResult<()> {
         let mut pos = 0;
         while pos < self.directories.len() {
             match self.directories[pos].as_str() {
@@ -333,7 +333,7 @@ impl StoragePath {
                         }
                     } else {
                         if self.is_absolute() {
-                            return Err(FsError::parse_error(
+                            return Err(StorageError::parse_error(
                                 &format!("{}", self),
                                 "Cannot have remaining relative path parts in an absolute path.",
                             ));
@@ -356,24 +356,24 @@ impl StoragePath {
     /// target path.
     ///
     /// Both this `StoragePath` and the target `StoragePath` must be absolute.
-    pub fn relative(&self, target: &StoragePath) -> FsResult<StoragePath> {
+    pub fn relative(&self, target: &StoragePath) -> StorageResult<StoragePath> {
         if !self.is_absolute {
-            return Err(FsError::parse_error(
+            return Err(StorageError::parse_error(
                 &format!("{}", self),
                 "Start path must be absolute when generating a relative path.",
             ));
         }
         if !target.is_absolute {
-            return Err(FsError::parse_error(
+            return Err(StorageError::parse_error(
                 &format!("{}", target),
                 "Final path must be absolute when generating a relative path.",
             ));
         }
         if self.prefix != target.prefix {
             if let Some(ref prefix) = target.prefix {
-                return Err(FsError::parse_error(&format!("{}", prefix), "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+                return Err(StorageError::parse_error(&format!("{}", prefix), "Can only generate a relative path between two absolute paths with the same Windows prefix."));
             } else {
-                return Err(FsError::parse_error("<none>", "Can only generate a relative path between two absolute paths with the same Windows prefix."));
+                return Err(StorageError::parse_error("<none>", "Can only generate a relative path between two absolute paths with the same Windows prefix."));
             }
         }
 
@@ -405,7 +405,7 @@ impl StoragePath {
     }
 
     /// Joins a relative path to the current path and returns the result.
-    pub fn join(&self, path: &StoragePath) -> FsResult<StoragePath> {
+    pub fn join(&self, path: &StoragePath) -> StorageResult<StoragePath> {
         self.assert_is_normalized();
         path.assert_is_normalized();
 
@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn test_path_parse_basic() -> FsResult<()> {
+    fn test_path_parse_basic() -> StorageResult<()> {
         let path = StoragePath::new("/foo/bar")?;
         assert_eq!(
             path,
@@ -635,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn test_path_parse_windows() -> FsResult<()> {
+    fn test_path_parse_windows() -> StorageResult<()> {
         let path = StoragePath::new("C:\\foo\\bar")?;
         assert_eq!(
             path,
@@ -739,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn test_path_normalize() -> FsResult<()> {
+    fn test_path_normalize() -> StorageResult<()> {
         let path = StoragePath::new("/foo/../bar")?;
         assert_eq!(path.to_string(), "/bar");
         assert!(path.is_absolute());
@@ -821,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn test_path_join() -> FsResult<()> {
+    fn test_path_join() -> StorageResult<()> {
         let base = StoragePath::new("/foo/bar")?;
         let sub = StoragePath::new("test/baz")?;
         let joined = base.join(&sub)?;
@@ -988,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn test_path_relative() -> FsResult<()> {
+    fn test_path_relative() -> StorageResult<()> {
         let base = StoragePath::new("/foo/bar")?;
         let next = StoragePath::new("/foo/baz")?;
         let relative = base.relative(&next)?;
@@ -1272,8 +1272,8 @@ mod tests {
     }
 
     #[test]
-    fn test_make_dir() -> FsResult<()> {
-        fn test_into_dir(path: &str, expected: &str) -> FsResult<()> {
+    fn test_make_dir() -> StorageResult<()> {
+        fn test_into_dir(path: &str, expected: &str) -> StorageResult<()> {
             let mut file = StoragePath::new(path)?;
             file.make_dir();
             assert_eq!(file.to_string(), expected);
@@ -1295,8 +1295,8 @@ mod tests {
     }
 
     #[test]
-    fn test_make_file() -> FsResult<()> {
-        fn test_into_file(path: &str, expected: &str) -> FsResult<()> {
+    fn test_make_file() -> StorageResult<()> {
+        fn test_into_file(path: &str, expected: &str) -> StorageResult<()> {
             let mut file = StoragePath::new(path)?;
             file.make_file();
             assert_eq!(file.to_string(), expected);

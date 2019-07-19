@@ -19,24 +19,24 @@ pub struct FileStore {
 }
 
 impl FileStore {
-    fn check_path(&self, path: &StoragePath, should_be_dir: bool) -> FsResult<()> {
+    fn check_path(&self, path: &StoragePath, should_be_dir: bool) -> StorageResult<()> {
         if !path.is_absolute() {
-            Err(FsError::invalid_path(
+            Err(StorageError::invalid_path(
                 path.clone(),
                 "Requests must use an absolute path.",
             ))
         } else if should_be_dir && !path.is_directory() {
-            Err(FsError::invalid_path(
+            Err(StorageError::invalid_path(
                 path.clone(),
                 "This request requires the path to a directory.",
             ))
         } else if !should_be_dir && path.is_directory() {
-            Err(FsError::invalid_path(
+            Err(StorageError::invalid_path(
                 path.clone(),
                 "This request requires the path to a file.",
             ))
         } else if path.is_windows() {
-            Err(FsError::invalid_path(
+            Err(StorageError::invalid_path(
                 path.clone(),
                 "Paths should not include windows prefixes.",
             ))
@@ -70,7 +70,7 @@ impl FileStore {
 
     /// Gets info about the object at the given path.
     ///
-    /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
+    /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if the file does not exist.
     pub fn get_object(&self, path: StoragePath) -> ObjectFuture {
         if let Err(e) = self.check_path(&path, false) {
@@ -86,7 +86,7 @@ impl FileStore {
     /// Dropping the stream at any point before completion should be considered
     /// to be safe.
     ///
-    /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
+    /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if the file does not exist.
     pub fn get_file_stream(&self, path: StoragePath) -> DataStreamFuture {
         if let Err(e) = self.check_path(&path, false) {
@@ -101,7 +101,7 @@ impl FileStore {
     /// For backends that support physical directories this will also delete the
     /// directory and its contents.
     ///
-    /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
+    /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if the object does not exist.
     pub fn delete_object(&self, path: StoragePath) -> OperationCompleteFuture {
         if let Err(e) = self.check_path(&path, false) {
@@ -147,8 +147,9 @@ impl FileStore {
         #[allow(clippy::redundant_closure)]
         let mapped = stream.map_ok(|b| Data::from_buf(b));
 
-        self.backend
-            .get()
-            .write_file_from_stream(path, WrappedStream::<FsResult<Data>>::from_stream(mapped))
+        self.backend.get().write_file_from_stream(
+            path,
+            WrappedStream::<StorageResult<Data>>::from_stream(mapped),
+        )
     }
 }

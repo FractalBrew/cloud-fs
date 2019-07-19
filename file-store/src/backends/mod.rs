@@ -37,7 +37,7 @@ pub(crate) enum BackendImplementation {
 }
 
 /// The trait that every storage backend must implement at a minimum.
-pub(crate) trait FsImpl {
+pub(crate) trait StorageImpl {
     /// Returns the type of backend.
     fn backend_type(&self) -> Backend;
 
@@ -73,7 +73,7 @@ pub(crate) trait FsImpl {
 }
 
 impl BackendImplementation {
-    pub(crate) fn get(&self) -> Box<&dyn FsImpl> {
+    pub(crate) fn get(&self) -> Box<&dyn StorageImpl> {
         match self {
             #[cfg(feature = "file")]
             BackendImplementation::File(ref fs) => Box::new(fs),
