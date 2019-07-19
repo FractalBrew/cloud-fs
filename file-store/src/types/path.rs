@@ -1,3 +1,5 @@
+//! The [`ObjectPath`](struct.ObjectPath.html) types, used for identifying objects in storage.
+
 use std::cmp::min;
 use std::cmp::{Ord, Ordering};
 use std::fmt;
@@ -37,14 +39,14 @@ impl Prefix {
 
         if path.starts_with("\\\\?\\") {
             if path.starts_with("\\\\?\\UNC\\") {
-                let (server, next) = FsPath::find_separator(path, 8, false);
+                let (server, next) = StoragePath::find_separator(path, 8, false);
                 if next == path.len() {
                     return Err(FsError::parse_error(
                         path,
                         "Incorrect format for verbatim UNC path.",
                     ));
                 }
-                let (share, last) = FsPath::find_separator(path, next + 1, false);
+                let (share, last) = StoragePath::find_separator(path, next + 1, false);
                 return Ok(Some((
                     Prefix::VerbatimUNC(server.to_owned(), share.to_owned()),
                     last,
@@ -67,13 +69,13 @@ impl Prefix {
             return Ok(Some((Prefix::Disk(path.as_bytes()[0]), 2)));
         }
 
-        if FsPath::find_separator(path, 0, true) == ("", 0)
-            && FsPath::find_separator(path, 1, true) == ("", 1)
+        if StoragePath::find_separator(path, 0, true) == ("", 0)
+            && StoragePath::find_separator(path, 1, true) == ("", 1)
         {
             // Starts with two separators.
-            let (server, next) = FsPath::find_separator(path, 2, true);
+            let (server, next) = StoragePath::find_separator(path, 2, true);
             if next < path.len() {
-                let (share, last) = FsPath::find_separator(path, next + 1, true);
+                let (share, last) = StoragePath::find_separator(path, next + 1, true);
                 return Ok(Some((
                     Prefix::UNC(server.to_owned(), share.to_owned()),
                     last,
@@ -169,14 +171,14 @@ impl Ord for Prefix {
 /// One chief difference is that paths that end with `/` are considered to be
 /// directories, those without are files.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct FsPath {
+pub struct StoragePath {
     pub(crate) prefix: Option<Prefix>,
     pub(crate) is_absolute: bool,
     pub(crate) directories: Vec<String>,
     pub(crate) filename: Option<String>,
 }
 
-impl FsPath {
+impl StoragePath {
     fn find_separator(string: &str, start: usize, allow_forward: bool) -> (&str, usize) {
         let part = &string[start..];
         let mut pos = part.find('\\').unwrap_or_else(|| part.len());
@@ -193,8 +195,8 @@ impl FsPath {
         }
     }
 
-    /// Creates a `FsPath` from a `Path` from std.
-    pub fn from_std_path(path: &Path) -> FsResult<FsPath> {
+    /// Creates a `StoragePath` from a `Path` from std.
+    pub fn from_std_path(path: &Path) -> FsResult<StoragePath> {
         let is_dir = if let Ok(m) = metadata(path) {
             m.is_dir()
         } else {
@@ -202,7 +204,7 @@ impl FsPath {
         };
 
         if let Some(string) = path.to_str() {
-            let mut fspath = FsPath::new(string)?;
+            let mut fspath = StoragePath::new(string)?;
             if is_dir {
                 if let Some(f) = fspath.filename.clone() {
                     fspath.push_dir(&f);
@@ -218,7 +220,7 @@ impl FsPath {
         }
     }
 
-    /// Converts a `FsPath` into a std `PathBuf`.
+    /// Converts a `StoragePath` into a std `PathBuf`.
     pub fn as_std_path(&self) -> PathBuf {
         let mut path = self.to_string();
         if self.filename.is_none() && !self.directories.is_empty() {
@@ -227,11 +229,11 @@ impl FsPath {
         PathBuf::from(path)
     }
 
-    /// Parses a string into a new `FsPath`.
-    pub fn new<S: AsRef<str>>(from: S) -> FsResult<FsPath> {
+    /// Parses a string into a new `StoragePath`.
+    pub fn new<S: AsRef<str>>(from: S) -> FsResult<StoragePath> {
         let path = from.as_ref();
         let mut pos: usize = 0;
-        let mut result: FsPath = Default::default();
+        let mut result: StoragePath = Default::default();
         let mut any_separator = true;
 
         if let Some((prefix, len)) = Prefix::try_parse(path)? {
@@ -247,7 +249,7 @@ impl FsPath {
         pos = 0;
 
         while pos < path.len() {
-            let (part, next) = FsPath::find_separator(path, pos, any_separator);
+            let (part, next) = StoragePath::find_separator(path, pos, any_separator);
 
             if next == 0 {
                 result.is_absolute = true;
@@ -270,17 +272,17 @@ impl FsPath {
         Ok(result)
     }
 
-    /// Tests whether this `FsPath` is an absolute path.
+    /// Tests whether this `StoragePath` is an absolute path.
     pub fn is_absolute(&self) -> bool {
         self.is_absolute
     }
 
-    /// Tests whether this `FsPath` is expected to be a directory.
+    /// Tests whether this `StoragePath` is expected to be a directory.
     pub fn is_directory(&self) -> bool {
         self.filename.is_none()
     }
 
-    /// Tests whether this `FsPath` is a windows style path.
+    /// Tests whether this `StoragePath` is a windows style path.
     pub fn is_windows(&self) -> bool {
         self.prefix.is_some()
     }
@@ -353,8 +355,8 @@ impl FsPath {
     /// Returns a relative path that when joined to this path will return the
     /// target path.
     ///
-    /// Both this `FsPath` and the target `FsPath` must be absolute.
-    pub fn relative(&self, target: &FsPath) -> FsResult<FsPath> {
+    /// Both this `StoragePath` and the target `StoragePath` must be absolute.
+    pub fn relative(&self, target: &StoragePath) -> FsResult<StoragePath> {
         if !self.is_absolute {
             return Err(FsError::parse_error(
                 &format!("{}", self),
@@ -378,7 +380,7 @@ impl FsPath {
         self.assert_is_normalized();
         target.assert_is_normalized();
 
-        let mut relative: FsPath = Default::default();
+        let mut relative: StoragePath = Default::default();
         relative.filename = target.filename.clone();
 
         let mut same_count = 0;
@@ -403,7 +405,7 @@ impl FsPath {
     }
 
     /// Joins a relative path to the current path and returns the result.
-    pub fn join(&self, path: &FsPath) -> FsResult<FsPath> {
+    pub fn join(&self, path: &StoragePath) -> FsResult<StoragePath> {
         self.assert_is_normalized();
         path.assert_is_normalized();
 
@@ -423,12 +425,12 @@ impl FsPath {
         Ok(joined)
     }
 
-    /// Gets the filename for this `FsPath` if there is one.
+    /// Gets the filename for this `StoragePath` if there is one.
     pub fn filename(&self) -> Option<String> {
         self.filename.clone()
     }
 
-    /// Moves this `FsPath` to the named subdirectory.
+    /// Moves this `StoragePath` to the named subdirectory.
     ///
     /// This will throw away the filename from the path.
     pub fn push_dir(&mut self, dir: &str) {
@@ -436,7 +438,7 @@ impl FsPath {
         self.filename = None;
     }
 
-    /// Overwrites the filename for this `FsPath`.
+    /// Overwrites the filename for this `StoragePath`.
     pub fn set_filename(&mut self, filename: &str) {
         self.filename = Some(filename.to_owned());
     }
@@ -458,7 +460,7 @@ impl FsPath {
     }
 }
 
-impl fmt::Display for FsPath {
+impl fmt::Display for StoragePath {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let separator = if self.prefix.is_some() { "\\" } else { "/" };
 
@@ -483,16 +485,16 @@ impl fmt::Display for FsPath {
     }
 }
 
-impl Eq for FsPath {}
+impl Eq for StoragePath {}
 
-impl PartialOrd for FsPath {
-    fn partial_cmp(&self, other: &FsPath) -> Option<Ordering> {
+impl PartialOrd for StoragePath {
+    fn partial_cmp(&self, other: &StoragePath) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for FsPath {
-    fn cmp(&self, other: &FsPath) -> Ordering {
+impl Ord for StoragePath {
+    fn cmp(&self, other: &StoragePath) -> Ordering {
         let selfp = format!("{}", self);
         let otherp = format!("{}", other);
 
@@ -500,8 +502,8 @@ impl Ord for FsPath {
     }
 }
 
-impl AsRef<FsPath> for FsPath {
-    fn as_ref(&self) -> &FsPath {
+impl AsRef<StoragePath> for StoragePath {
+    fn as_ref(&self) -> &StoragePath {
         self
     }
 }
@@ -517,10 +519,10 @@ mod tests {
 
     #[test]
     fn test_path_parse_basic() -> FsResult<()> {
-        let path = FsPath::new("/foo/bar")?;
+        let path = StoragePath::new("/foo/bar")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: None,
                 is_absolute: true,
                 directories: directories(vec!["foo"]),
@@ -533,10 +535,10 @@ mod tests {
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("foo/bar")?;
+        let path = StoragePath::new("foo/bar")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: None,
                 is_absolute: false,
                 directories: directories(vec!["foo"]),
@@ -549,10 +551,10 @@ mod tests {
         assert!(!path.is_windows());
         assert!(!path.is_above_base());
 
-        let path = FsPath::new("foo/bar/")?;
+        let path = StoragePath::new("foo/bar/")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: None,
                 is_absolute: false,
                 directories: directories(vec!["foo", "bar"]),
@@ -565,10 +567,10 @@ mod tests {
         assert!(!path.is_windows());
         assert!(!path.is_above_base());
 
-        let path = FsPath::new("/")?;
+        let path = StoragePath::new("/")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: None,
                 is_absolute: true,
                 directories: directories(vec![]),
@@ -581,10 +583,10 @@ mod tests {
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("")?;
+        let path = StoragePath::new("")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: None,
                 is_absolute: false,
                 directories: directories(vec![]),
@@ -597,10 +599,10 @@ mod tests {
         assert!(!path.is_windows());
         assert!(!path.is_above_base());
 
-        let path = FsPath::new("foo\\bar/")?;
+        let path = StoragePath::new("foo\\bar/")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: None,
                 is_absolute: false,
                 directories: directories(vec!["foo", "bar"]),
@@ -613,10 +615,10 @@ mod tests {
         assert!(!path.is_windows());
         assert!(!path.is_above_base());
 
-        let path = FsPath::new("\\foo\\bar")?;
+        let path = StoragePath::new("\\foo\\bar")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: None,
                 is_absolute: true,
                 directories: directories(vec!["foo"]),
@@ -634,10 +636,10 @@ mod tests {
 
     #[test]
     fn test_path_parse_windows() -> FsResult<()> {
-        let path = FsPath::new("C:\\foo\\bar")?;
+        let path = StoragePath::new("C:\\foo\\bar")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: Some(Prefix::Disk(b'C')),
                 is_absolute: true,
                 directories: directories(vec!["foo"]),
@@ -650,10 +652,10 @@ mod tests {
         assert!(path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("C:/foo\\bar")?;
+        let path = StoragePath::new("C:/foo\\bar")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: Some(Prefix::Disk(b'C')),
                 is_absolute: true,
                 directories: directories(vec!["foo"]),
@@ -666,10 +668,10 @@ mod tests {
         assert!(path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("\\\\bar\\foo/test")?;
+        let path = StoragePath::new("\\\\bar\\foo/test")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: Some(Prefix::UNC(String::from("bar"), String::from("foo"))),
                 is_absolute: true,
                 directories: directories(vec![]),
@@ -682,10 +684,10 @@ mod tests {
         assert!(path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("\\\\?\\C:\\foo\\bar")?;
+        let path = StoragePath::new("\\\\?\\C:\\foo\\bar")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: Some(Prefix::VerbatimDisk(b'C')),
                 is_absolute: true,
                 directories: directories(vec!["foo"]),
@@ -698,10 +700,10 @@ mod tests {
         assert!(path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("\\\\?\\C:\\foo/bar")?;
+        let path = StoragePath::new("\\\\?\\C:\\foo/bar")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: Some(Prefix::VerbatimDisk(b'C')),
                 is_absolute: true,
                 directories: directories(vec![]),
@@ -714,10 +716,10 @@ mod tests {
         assert!(path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("\\\\?\\UNC\\bar\\foo\\test")?;
+        let path = StoragePath::new("\\\\?\\UNC\\bar\\foo\\test")?;
         assert_eq!(
             path,
-            FsPath {
+            StoragePath {
                 prefix: Some(Prefix::VerbatimUNC(
                     String::from("bar"),
                     String::from("foo")
@@ -738,77 +740,77 @@ mod tests {
 
     #[test]
     fn test_path_normalize() -> FsResult<()> {
-        let path = FsPath::new("/foo/../bar")?;
+        let path = StoragePath::new("/foo/../bar")?;
         assert_eq!(path.to_string(), "/bar");
         assert!(path.is_absolute());
         assert!(!path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("/foo/../bar/")?;
+        let path = StoragePath::new("/foo/../bar/")?;
         assert_eq!(path.to_string(), "/bar/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("/foo/baz//diz/.././bar/")?;
+        let path = StoragePath::new("/foo/baz//diz/.././bar/")?;
         assert_eq!(path.to_string(), "/foo/baz/bar/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("../baz/../../diz")?;
+        let path = StoragePath::new("../baz/../../diz")?;
         assert_eq!(path.to_string(), "../../diz");
         assert!(!path.is_absolute());
         assert!(!path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("../foo/./../bar/")?;
+        let path = StoragePath::new("../foo/./../bar/")?;
         assert_eq!(path.to_string(), "../bar/");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("/foo/bar/..")?;
+        let path = StoragePath::new("/foo/bar/..")?;
         assert_eq!(path.to_string(), "/foo/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("/foo/bar/.")?;
+        let path = StoragePath::new("/foo/bar/.")?;
         assert_eq!(path.to_string(), "/foo/bar/");
         assert!(path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("./")?;
+        let path = StoragePath::new("./")?;
         assert_eq!(path.to_string(), "");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(!path.is_above_base());
 
-        let path = FsPath::new(".")?;
+        let path = StoragePath::new(".")?;
         assert_eq!(path.to_string(), "");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(!path.is_above_base());
 
-        let path = FsPath::new("../")?;
+        let path = StoragePath::new("../")?;
         assert_eq!(path.to_string(), "../");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
         assert!(!path.is_windows());
         assert!(path.is_above_base());
 
-        let path = FsPath::new("..")?;
+        let path = StoragePath::new("..")?;
         assert_eq!(path.to_string(), "../");
         assert!(!path.is_absolute());
         assert!(path.is_directory());
@@ -820,8 +822,8 @@ mod tests {
 
     #[test]
     fn test_path_join() -> FsResult<()> {
-        let base = FsPath::new("/foo/bar")?;
-        let sub = FsPath::new("test/baz")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let sub = StoragePath::new("test/baz")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/test/baz");
         assert!(joined.is_absolute());
@@ -829,8 +831,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new("test/baz")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new("test/baz")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/bar/test/baz");
         assert!(joined.is_absolute());
@@ -838,8 +840,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new("test/baz/")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new("test/baz/")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/bar/test/baz/");
         assert!(joined.is_absolute());
@@ -847,8 +849,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("C:\\")?;
-        let sub = FsPath::new("test/baz/")?;
+        let base = StoragePath::new("C:\\")?;
+        let sub = StoragePath::new("test/baz/")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "C:\\test\\baz\\");
         assert!(joined.is_absolute());
@@ -856,8 +858,8 @@ mod tests {
         assert!(joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/")?;
-        let sub = FsPath::new("test/baz/")?;
+        let base = StoragePath::new("/")?;
+        let sub = StoragePath::new("test/baz/")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/test/baz/");
         assert!(joined.is_absolute());
@@ -865,8 +867,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let sub = FsPath::new("../")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let sub = StoragePath::new("../")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
@@ -874,8 +876,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let sub = FsPath::new("..")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let sub = StoragePath::new("..")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
@@ -883,8 +885,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new("../baz")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new("../baz")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/baz");
         assert!(joined.is_absolute());
@@ -892,8 +894,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new("./")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new("./")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
@@ -901,8 +903,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new(".")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new(".")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
@@ -910,8 +912,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new("./..")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new("./..")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
@@ -919,8 +921,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let sub = FsPath::new("./")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let sub = StoragePath::new("./")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
@@ -928,8 +930,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let sub = FsPath::new("..")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let sub = StoragePath::new("..")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/");
         assert!(joined.is_absolute());
@@ -937,8 +939,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let sub = FsPath::new("")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let sub = StoragePath::new("")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/");
         assert!(joined.is_absolute());
@@ -946,8 +948,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let sub = FsPath::new("baz")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let sub = StoragePath::new("baz")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/baz");
         assert!(joined.is_absolute());
@@ -955,8 +957,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new("")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new("")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/bar/");
         assert!(joined.is_absolute());
@@ -964,8 +966,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let sub = FsPath::new("baz")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let sub = StoragePath::new("baz")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/bar/baz");
         assert!(joined.is_absolute());
@@ -973,8 +975,8 @@ mod tests {
         assert!(!joined.is_windows());
         assert!(joined.is_above_base());
 
-        let base = FsPath::new("/")?;
-        let sub = FsPath::new("foo/bar/baz")?;
+        let base = StoragePath::new("/")?;
+        let sub = StoragePath::new("foo/bar/baz")?;
         let joined = base.join(&sub)?;
         assert_eq!(joined.to_string(), "/foo/bar/baz");
         assert!(joined.is_absolute());
@@ -987,8 +989,8 @@ mod tests {
 
     #[test]
     fn test_path_relative() -> FsResult<()> {
-        let base = FsPath::new("/foo/bar")?;
-        let next = FsPath::new("/foo/baz")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let next = StoragePath::new("/foo/baz")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "baz");
         assert!(!relative.is_absolute());
@@ -996,8 +998,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let next = FsPath::new("/foo/baz")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let next = StoragePath::new("/foo/baz")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../baz");
         assert!(!relative.is_absolute());
@@ -1005,8 +1007,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let next = FsPath::new("/foo/baz/")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let next = StoragePath::new("/foo/baz/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../baz/");
         assert!(!relative.is_absolute());
@@ -1014,8 +1016,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let next = FsPath::new("/foo/baz/")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let next = StoragePath::new("/foo/baz/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "baz/");
         assert!(!relative.is_absolute());
@@ -1023,8 +1025,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let next = FsPath::new("/foo/bar")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let next = StoragePath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "bar");
         assert!(!relative.is_absolute());
@@ -1032,8 +1034,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let next = FsPath::new("/foo/bar/")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let next = StoragePath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "");
         assert!(!relative.is_absolute());
@@ -1041,8 +1043,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let next = FsPath::new("/foo/bar")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let next = StoragePath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../bar");
         assert!(!relative.is_absolute());
@@ -1050,8 +1052,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar")?;
-        let next = FsPath::new("/foo/bar/")?;
+        let base = StoragePath::new("/foo/bar")?;
+        let next = StoragePath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "bar/");
         assert!(!relative.is_absolute());
@@ -1059,8 +1061,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/")?;
-        let next = FsPath::new("/foo/")?;
+        let base = StoragePath::new("/foo/bar/")?;
+        let next = StoragePath::new("/foo/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../");
         assert!(!relative.is_absolute());
@@ -1068,8 +1070,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz")?;
-        let next = FsPath::new("/foo/bar/bad/gah")?;
+        let base = StoragePath::new("/foo/bar/baz")?;
+        let next = StoragePath::new("/foo/bar/bad/gah")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "bad/gah");
         assert!(!relative.is_absolute());
@@ -1077,8 +1079,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz")?;
-        let next = FsPath::new("/foo/bad/gah")?;
+        let base = StoragePath::new("/foo/bar/baz")?;
+        let next = StoragePath::new("/foo/bad/gah")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../bad/gah");
         assert!(!relative.is_absolute());
@@ -1086,8 +1088,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz")?;
-        let next = FsPath::new("/foo/bar/baz")?;
+        let base = StoragePath::new("/foo/bar/baz")?;
+        let next = StoragePath::new("/foo/bar/baz")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "baz");
         assert!(!relative.is_absolute());
@@ -1095,8 +1097,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz")?;
-        let next = FsPath::new("/foo/bar")?;
+        let base = StoragePath::new("/foo/bar/baz")?;
+        let next = StoragePath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../bar");
         assert!(!relative.is_absolute());
@@ -1104,8 +1106,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz")?;
-        let next = FsPath::new("/foo/bar/")?;
+        let base = StoragePath::new("/foo/bar/baz")?;
+        let next = StoragePath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "");
         assert!(!relative.is_absolute());
@@ -1113,8 +1115,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz")?;
-        let next = FsPath::new("/foo/bar/baz/")?;
+        let base = StoragePath::new("/foo/bar/baz")?;
+        let next = StoragePath::new("/foo/bar/baz/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "baz/");
         assert!(!relative.is_absolute());
@@ -1122,8 +1124,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz")?;
-        let next = FsPath::new("/foo/bar/baz/gad")?;
+        let base = StoragePath::new("/foo/bar/baz")?;
+        let next = StoragePath::new("/foo/bar/baz/gad")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "baz/gad");
         assert!(!relative.is_absolute());
@@ -1131,8 +1133,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/")?;
-        let next = FsPath::new("/foo/bar/bad/gah")?;
+        let base = StoragePath::new("/foo/bar/baz/")?;
+        let next = StoragePath::new("/foo/bar/bad/gah")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../bad/gah");
         assert!(!relative.is_absolute());
@@ -1140,8 +1142,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/")?;
-        let next = FsPath::new("/foo/bad/gah")?;
+        let base = StoragePath::new("/foo/bar/baz/")?;
+        let next = StoragePath::new("/foo/bad/gah")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../../bad/gah");
         assert!(!relative.is_absolute());
@@ -1149,8 +1151,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/")?;
-        let next = FsPath::new("/foo/bar/baz")?;
+        let base = StoragePath::new("/foo/bar/baz/")?;
+        let next = StoragePath::new("/foo/bar/baz")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../baz");
         assert!(!relative.is_absolute());
@@ -1158,8 +1160,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/")?;
-        let next = FsPath::new("/foo/bar")?;
+        let base = StoragePath::new("/foo/bar/baz/")?;
+        let next = StoragePath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../../bar");
         assert!(!relative.is_absolute());
@@ -1167,8 +1169,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/")?;
-        let next = FsPath::new("/foo/bar/")?;
+        let base = StoragePath::new("/foo/bar/baz/")?;
+        let next = StoragePath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../");
         assert!(!relative.is_absolute());
@@ -1176,8 +1178,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/")?;
-        let next = FsPath::new("/foo/bar/baz/")?;
+        let base = StoragePath::new("/foo/bar/baz/")?;
+        let next = StoragePath::new("/foo/bar/baz/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "");
         assert!(!relative.is_absolute());
@@ -1185,8 +1187,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/")?;
-        let next = FsPath::new("/foo/bar/baz/gad")?;
+        let base = StoragePath::new("/foo/bar/baz/")?;
+        let next = StoragePath::new("/foo/bar/baz/gad")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "gad");
         assert!(!relative.is_absolute());
@@ -1194,8 +1196,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(!relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
-        let next = FsPath::new("/foo/bar/bad/gah")?;
+        let base = StoragePath::new("/foo/bar/baz/gah/ooh")?;
+        let next = StoragePath::new("/foo/bar/bad/gah")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../../bad/gah");
         assert!(!relative.is_absolute());
@@ -1203,8 +1205,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
-        let next = FsPath::new("/foo/bad/gah")?;
+        let base = StoragePath::new("/foo/bar/baz/gah/ooh")?;
+        let next = StoragePath::new("/foo/bad/gah")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../../../bad/gah");
         assert!(!relative.is_absolute());
@@ -1212,8 +1214,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
-        let next = FsPath::new("/foo/bar/baz")?;
+        let base = StoragePath::new("/foo/bar/baz/gah/ooh")?;
+        let next = StoragePath::new("/foo/bar/baz")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../../baz");
         assert!(!relative.is_absolute());
@@ -1221,8 +1223,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
-        let next = FsPath::new("/foo/bar")?;
+        let base = StoragePath::new("/foo/bar/baz/gah/ooh")?;
+        let next = StoragePath::new("/foo/bar")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../../../bar");
         assert!(!relative.is_absolute());
@@ -1230,8 +1232,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
-        let next = FsPath::new("/foo/bar/")?;
+        let base = StoragePath::new("/foo/bar/baz/gah/ooh")?;
+        let next = StoragePath::new("/foo/bar/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../../");
         assert!(!relative.is_absolute());
@@ -1239,8 +1241,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
-        let next = FsPath::new("/foo/bar/baz/")?;
+        let base = StoragePath::new("/foo/bar/baz/gah/ooh")?;
+        let next = StoragePath::new("/foo/bar/baz/")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../");
         assert!(!relative.is_absolute());
@@ -1248,8 +1250,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/foo/bar/baz/gah/ooh")?;
-        let next = FsPath::new("/foo/bar/baz/gad")?;
+        let base = StoragePath::new("/foo/bar/baz/gah/ooh")?;
+        let next = StoragePath::new("/foo/bar/baz/gad")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "../gad");
         assert!(!relative.is_absolute());
@@ -1257,8 +1259,8 @@ mod tests {
         assert!(!relative.is_windows());
         assert!(relative.is_above_base());
 
-        let base = FsPath::new("/")?;
-        let next = FsPath::new("/foo/bar/baz/gad")?;
+        let base = StoragePath::new("/")?;
+        let next = StoragePath::new("/foo/bar/baz/gad")?;
         let relative = base.relative(&next)?;
         assert_eq!(relative.to_string(), "foo/bar/baz/gad");
         assert!(!relative.is_absolute());
@@ -1272,7 +1274,7 @@ mod tests {
     #[test]
     fn test_make_dir() -> FsResult<()> {
         fn test_into_dir(path: &str, expected: &str) -> FsResult<()> {
-            let mut file = FsPath::new(path)?;
+            let mut file = StoragePath::new(path)?;
             file.make_dir();
             assert_eq!(file.to_string(), expected);
             Ok(())
@@ -1295,7 +1297,7 @@ mod tests {
     #[test]
     fn test_make_file() -> FsResult<()> {
         fn test_into_file(path: &str, expected: &str) -> FsResult<()> {
-            let mut file = FsPath::new(path)?;
+            let mut file = StoragePath::new(path)?;
             file.make_file();
             assert_eq!(file.to_string(), expected);
             Ok(())

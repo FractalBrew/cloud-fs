@@ -1,4 +1,3 @@
-extern crate cloud_fs;
 extern crate tempfile;
 
 #[macro_use]
@@ -15,8 +14,8 @@ use tempfile::{tempdir, TempDir};
 
 use utils::*;
 
-use cloud_fs::backends::Backend;
-use cloud_fs::*;
+use file_store::backends::Backend;
+use file_store::*;
 
 pub type TestResult<I> = Result<I, TestError>;
 
@@ -73,10 +72,10 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    pub fn get_target(&self, path: &FsPath) -> PathBuf {
+    pub fn get_target(&self, path: &StoragePath) -> PathBuf {
         let mut target = self.get_root();
         target.push(
-            FsPath::new("/")
+            StoragePath::new("/")
                 .unwrap()
                 .relative(path)
                 .unwrap()
@@ -174,7 +173,7 @@ macro_rules! make_test {
         #[test]
         fn $name() {
             let result: Result<crate::runner::TestResult<()>, std::sync::mpsc::TryRecvError> =
-                cloud_fs::executor::run(async {
+                file_store::executor::run(async {
                     let test_context = crate::runner::prepare_test($backend)?;
                     let (fs, backend_context) = $setup(&test_context).await?;
                     crate::runner::$pkg::$name(&fs, &test_context).await?;

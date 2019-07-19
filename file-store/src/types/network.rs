@@ -1,3 +1,5 @@
+//! Networking specific types.
+
 use super::*;
 
 #[derive(Clone, Debug, PartialEq)]

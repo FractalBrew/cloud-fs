@@ -2,8 +2,8 @@
 //!
 //! Ideally everything in this crate would run under any executor. In practice
 //! some parts have dependencies on tokio's executor. Hopefully that will change
-//! in the future though so for now this exposes a way to run futures that will
-//! work for this crate.
+//! in the future though so for now this exposes an executor guaranteed to work
+//! and used in tests to verify that.
 
 extern crate tokio;
 
@@ -15,7 +15,7 @@ use futures::channel::oneshot;
 use futures::compat::Compat;
 use futures::future::FutureExt;
 
-/// Runs a future on the existing runtime.
+/// Spawns a future on the existing runtime returning its result.
 pub fn spawn<F>(future: F) -> impl Future<Output = Result<F::Output, oneshot::Canceled>>
 where
     F: Future + Send + 'static,
@@ -34,6 +34,8 @@ where
 }
 
 /// Runs a future to completion on a new tokio executor and returns the result.
+///
+/// This blocks the calling thread.
 pub fn run<F>(future: F) -> Result<F::Output, mpsc::TryRecvError>
 where
     F: Future + Send + 'static,

@@ -17,48 +17,48 @@ use tokio::prelude::Async as TokioAsync;
 use tokio_fs::{read_dir, remove_dir, remove_file, symlink_metadata, DirEntry, File};
 
 use super::{Backend, BackendImplementation, FsImpl};
-use crate::fs::Fs;
-use crate::types::stream::{FsStreamPoll, MergedStreams, StreamHolder};
+use crate::filestore::FileStore;
+use crate::types::stream::{MergedStreams, ResultStreamPoll, WrappedStream};
 use crate::types::*;
 
 // How many bytes to attempt to read from a file at a time.
 const BUFFER_SIZE: usize = 20 * 1024 * 1024;
 
-fn get_fserror(error: io::Error, path: FsPath) -> FsError {
+fn get_fserror(error: io::Error, path: StoragePath) -> FsError {
     match error.kind() {
         io::ErrorKind::NotFound => FsError::not_found(path),
         _ => FsError::unknown(error),
     }
 }
 
-fn wrap_future<F>(future: F, path: FsPath) -> impl Future<Output = Result<F::Ok, FsError>>
+fn wrap_future<F>(future: F, path: StoragePath) -> impl Future<Output = Result<F::Ok, FsError>>
 where
     F: TryFutureExt<Error = io::Error>,
 {
     future.map_err(move |e| get_fserror(e, path))
 }
 
-fn wrap_stream<S>(stream: S, path: FsPath) -> impl Stream<Item = Result<S::Ok, FsError>>
+fn wrap_stream<S>(stream: S, path: StoragePath) -> impl Stream<Item = Result<S::Ok, FsError>>
 where
     S: TryStreamExt<Error = io::Error>,
 {
     stream.map_err(move |e| get_fserror(e, path.clone()))
 }
 
-fn get_fsfile(mut path: FsPath, metadata: &Metadata) -> FsFile {
+fn get_fsfile(mut path: StoragePath, metadata: &Metadata) -> Object {
     let (file_type, size) = if metadata.is_file() {
-        (FsFileType::File, metadata.len())
+        (ObjectType::File, metadata.len())
     } else if metadata.is_dir() {
-        (FsFileType::Directory, 0)
+        (ObjectType::Directory, 0)
     } else {
-        (FsFileType::Unknown, 0)
+        (ObjectType::Unknown, 0)
     };
 
     if metadata.is_dir() {
         path.make_dir();
     }
 
-    FsFile {
+    Object {
         file_type,
         path,
         size,
@@ -67,11 +67,11 @@ fn get_fsfile(mut path: FsPath, metadata: &Metadata) -> FsFile {
 
 #[derive(Clone, Debug)]
 struct FileSpace {
-    base: FsPath,
+    base: StoragePath,
 }
 
 impl FileSpace {
-    fn get_std_path(&self, path: &FsPath) -> FsResult<PathBuf> {
+    fn get_std_path(&self, path: &StoragePath) -> FsResult<PathBuf> {
         if !path.is_absolute() {
             return Err(FsError::parse_error(
                 &format!("{}", path),
@@ -79,7 +79,7 @@ impl FileSpace {
             ));
         }
 
-        let relative = FsPath::new("/")?.relative(path)?;
+        let relative = StoragePath::new("/")?.relative(path)?;
         let target = self.base.join(&relative)?;
 
         Ok(target.as_std_path())
@@ -88,12 +88,12 @@ impl FileSpace {
 
 fn directory_stream(
     space: &FileSpace,
-    path: FsPath,
-) -> impl Stream<Item = FsResult<(FsPath, Metadata)>> {
+    path: StoragePath,
+) -> impl Stream<Item = FsResult<(StoragePath, Metadata)>> {
     #[allow(clippy::needless_lifetimes)]
     async fn build_base(
         space: &FileSpace,
-        path: FsPath,
+        path: StoragePath,
     ) -> FsResult<impl Stream<Item = FsResult<DirEntry>>> {
         let target = space.get_std_path(&path)?;
         Ok(wrap_stream(
@@ -106,11 +106,13 @@ fn directory_stream(
 
     async fn start_stream(
         space: FileSpace,
-        path: FsPath,
-    ) -> impl Stream<Item = FsResult<(FsPath, Metadata)>> {
+        path: StoragePath,
+    ) -> impl Stream<Item = FsResult<(StoragePath, Metadata)>> {
         let stream = match build_base(&space, path.clone()).await {
             Ok(s) => s,
-            Err(e) => return once(ready::<FsResult<(FsPath, Metadata)>>(Err(e))).left_stream(),
+            Err(e) => {
+                return once(ready::<FsResult<(StoragePath, Metadata)>>(Err(e))).left_stream()
+            }
         };
 
         stream
@@ -147,14 +149,14 @@ fn directory_stream(
     start_stream(space.clone(), path).flatten_stream()
 }
 
-type FileList = FsResult<(FsPath, Metadata)>;
+type FileList = FsResult<(StoragePath, Metadata)>;
 struct FileLister {
     stream: Pin<Box<MergedStreams<FileList>>>,
     space: FileSpace,
 }
 
 impl FileLister {
-    fn list(space: FileSpace, path: FsPath) -> FileLister {
+    fn list(space: FileSpace, path: StoragePath) -> FileLister {
         let mut lister = FileLister {
             stream: Box::pin(MergedStreams::new()),
             space,
@@ -164,15 +166,15 @@ impl FileLister {
         lister
     }
 
-    fn add_directory(&mut self, path: FsPath) {
+    fn add_directory(&mut self, path: StoragePath) {
         self.stream.push(directory_stream(&self.space, path));
     }
 }
 
 impl Stream for FileLister {
-    type Item = FsResult<FsFile>;
+    type Item = FsResult<Object>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> FsStreamPoll<FsFile> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<Object> {
         match self.stream.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok((path, metadata)))) => {
                 if metadata.is_dir() {
@@ -189,12 +191,12 @@ impl Stream for FileLister {
 }
 
 struct FileReadStream {
-    path: FsPath,
+    path: StoragePath,
     file: File,
 }
 
 impl FileReadStream {
-    fn build(path: FsPath, file: File) -> DataStream {
+    fn build(path: StoragePath, file: File) -> DataStream {
         let stream = FileReadStream { path, file };
 
         DataStream::from_stream(stream.compat())
@@ -220,16 +222,16 @@ impl TokioStream for FileReadStream {
 }
 
 #[allow(clippy::needless_lifetimes)]
-async fn delete_directory(space: FileSpace, path: FsPath) -> FsResult<()> {
+async fn delete_directory(space: FileSpace, path: StoragePath) -> FsResult<()> {
     let allfiles = FileLister::list(space.clone(), path.clone())
-        .try_collect::<Vec<FsFile>>()
+        .try_collect::<Vec<Object>>()
         .await?;
     let files = allfiles
         .iter()
-        .filter(|file| file.file_type() != FsFileType::Directory);
+        .filter(|file| file.file_type() != ObjectType::Directory);
     let directories = allfiles
         .iter()
-        .filter(|file| file.file_type() == FsFileType::Directory);
+        .filter(|file| file.file_type() == ObjectType::Directory);
 
     for file in files {
         let target = space.get_std_path(&file.path())?;
@@ -253,21 +255,26 @@ pub struct FileBackend {
 }
 
 impl FileBackend {
-    /// Creates a new instance of the file backend.
+    /// Creates a new [`FileStore`](../struct.FileStore.html) instance using the
+    /// file backend.
     ///
     /// The root path provided must be a directory and is used as the base of
-    /// the filesystem visible.
+    /// the visible storage.
+    ///
+    /// Directories and symlinks cannot be created but will be visible through
+    /// `list_objects` and `get_object`. `delete_object` and `write_file_from_stream`
+    /// will remove these (in the directory case recursively).
     pub fn connect(root: &Path) -> ConnectFuture {
         let target = root.to_owned();
         ConnectFuture::from_future(async move {
-            let path = FsPath::from_std_path(&target)?;
+            let path = StoragePath::from_std_path(&target)?;
 
             let metadata =
                 wrap_future(symlink_metadata(target.clone()).compat(), path.clone()).await?;
             if !metadata.is_dir() {
                 Err(FsError::invalid_settings("Root path is not a directory."))
             } else {
-                Ok(Fs {
+                Ok(FileStore {
                     backend: BackendImplementation::File(FileBackend {
                         space: FileSpace { base: path },
                     }),
@@ -276,11 +283,12 @@ impl FileBackend {
         })
     }
 
-    /// Allows access to the `FileBackend` that the passed `[`Fs`](../struct.Fs.html) is using.
+    /// Allows access to the `FileBackend` that the passed [`FileStore`](../struct.FileStore.html) is using.
     ///
-    /// Returns an error if the [`Fs`](../struct.Fs.html) is using a different backend.
+    /// Returns an error if the [`FileStore`](../struct.FileStore.html) is using
+    /// a different backend.
     #[allow(unreachable_patterns)]
-    pub fn from_fs(fs: &Fs) -> Result<&FileBackend, ()> {
+    pub fn from_filestore(fs: &FileStore) -> Result<&FileBackend, ()> {
         match fs.backend_implementation() {
             BackendImplementation::File(b) => Ok(&b),
             _ => Err(()),
@@ -293,16 +301,16 @@ impl FsImpl for FileBackend {
         Backend::File
     }
 
-    fn list_files(&self, path: FsPath) -> FileListFuture {
-        async fn list(space: FileSpace, path: FsPath) -> FsResult<FileListStream> {
-            Ok(FileListStream::from_stream(FileLister::list(space, path)))
+    fn list_objects(&self, path: StoragePath) -> ObjectStreamFuture {
+        async fn list(space: FileSpace, path: StoragePath) -> FsResult<ObjectStream> {
+            Ok(ObjectStream::from_stream(FileLister::list(space, path)))
         }
 
-        FileListFuture::from_future(list(self.space.clone(), path))
+        ObjectStreamFuture::from_future(list(self.space.clone(), path))
     }
 
-    fn get_file(&self, path: FsPath) -> FileFuture {
-        async fn get(space: FileSpace, path: FsPath) -> FsResult<FsFile> {
+    fn get_object(&self, path: StoragePath) -> ObjectFuture {
+        async fn get(space: FileSpace, path: StoragePath) -> FsResult<Object> {
             let target = space.get_std_path(&path)?;
             let metadata = match symlink_metadata(target.clone()).compat().await {
                 Ok(m) => m,
@@ -312,11 +320,11 @@ impl FsImpl for FileBackend {
             Ok(get_fsfile(path, &metadata))
         }
 
-        FileFuture::from_future(get(self.space.clone(), path))
+        ObjectFuture::from_future(get(self.space.clone(), path))
     }
 
-    fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
-        async fn read(space: FileSpace, path: FsPath) -> FsResult<DataStream> {
+    fn get_file_stream(&self, path: StoragePath) -> DataStreamFuture {
+        async fn read(space: FileSpace, path: StoragePath) -> FsResult<DataStream> {
             let target = space.get_std_path(&path)?;
 
             let metadata =
@@ -332,8 +340,8 @@ impl FsImpl for FileBackend {
         DataStreamFuture::from_future(read(self.space.clone(), path))
     }
 
-    fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
-        async fn delete(space: FileSpace, mut path: FsPath) -> FsResult<()> {
+    fn delete_object(&self, path: StoragePath) -> OperationCompleteFuture {
+        async fn delete(space: FileSpace, mut path: StoragePath) -> FsResult<()> {
             let target = space.get_std_path(&path)?;
             let metadata =
                 wrap_future(symlink_metadata(target.clone()).compat(), path.clone()).await?;
@@ -349,15 +357,15 @@ impl FsImpl for FileBackend {
         OperationCompleteFuture::from_future(delete(self.space.clone(), path))
     }
 
-    fn write_from_stream(
+    fn write_file_from_stream(
         &self,
-        path: FsPath,
-        stream: StreamHolder<Result<Data, io::Error>>,
+        path: StoragePath,
+        stream: WrappedStream<Result<Data, io::Error>>,
     ) -> OperationCompleteFuture {
         async fn write(
             space: FileSpace,
-            mut path: FsPath,
-            stream: StreamHolder<Result<Data, io::Error>>,
+            mut path: StoragePath,
+            stream: WrappedStream<Result<Data, io::Error>>,
         ) -> FsResult<()> {
             let target = space.get_std_path(&path)?;
             match symlink_metadata(target.clone()).compat().await {

@@ -6,18 +6,17 @@ use super::*;
 /// The type of an [`FsError`](struct.FsError.html).
 #[derive(Clone, Debug, PartialEq)]
 pub enum FsErrorKind {
-    /// An error that occuring while parsing or manipulating an
-    /// [`FsPath`](struct.FsPath.html].
+    /// An error that occuring while parsing or manipulating a
+    /// [`StoragePath`](struct.StoragePath.html].
     ParseError(String),
 
-    /// An error a backend may return if an invalid storage host was requested.
-    //AddressNotSupported(Address),
+    // An error a backend may return if an invalid storage host was requested.
+    // AddressNotSupported(Address),
     /// An error returned when attempting to access an invalid path.
-    InvalidPath(FsPath),
-    /// The item requested was not found.
-    NotFound(FsPath),
-    /// An error returned if the [`FsSettings`](struct.FsSettings.html) is
-    /// invalid in some way.
+    InvalidPath(StoragePath),
+    /// The object requested was not found.
+    NotFound(StoragePath),
+    /// An error returned if configuration for a backend was invalid somehow.
     InvalidSettings,
     /// An unknown error type, usually a marker that this `FsError` was
     /// generated from a different error type.
@@ -50,14 +49,14 @@ impl FsError {
         }
     }*/
 
-    pub(crate) fn invalid_path(path: FsPath, description: &str) -> FsError {
+    pub(crate) fn invalid_path(path: StoragePath, description: &str) -> FsError {
         FsError {
             description: format!("Path '{}' was invalid: {}", path, description),
             kind: FsErrorKind::InvalidPath(path),
         }
     }
 
-    pub(crate) fn not_found(path: FsPath) -> FsError {
+    pub(crate) fn not_found(path: StoragePath) -> FsError {
         FsError {
             description: format!("File at '{}' was not found.", path),
             kind: FsErrorKind::NotFound(path),

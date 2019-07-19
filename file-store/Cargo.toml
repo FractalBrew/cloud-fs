@@ -1,5 +1,5 @@
 [package]
-name = "cloud-fs"
+name = "file-store"
 version = "0.1.0"
 authors = ["Dave Townsend <dtownsend@oxymoronical.com>"]
 edition = "2018"

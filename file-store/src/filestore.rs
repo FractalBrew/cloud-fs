@@ -1,3 +1,5 @@
+//! The generic [`FileStore`](../struct.FileStore.html).
+
 use std::io;
 
 use bytes::buf::FromBuf;
@@ -5,19 +7,19 @@ use bytes::IntoBuf;
 use futures::stream::{Stream, TryStreamExt};
 
 use super::backends::{Backend, BackendImplementation};
-use super::types::stream::StreamHolder;
+use super::types::stream::WrappedStream;
 use super::types::*;
 
-/// The main implementation used to interact with a storage backend.
+/// The main interface used to interact with a storage backend.
 ///
-/// Create an `Fs` from one of the alternative [`backends`](backends/index.html).
+/// Create `FileStore`s from one of the [backend implementations](backends/index.html).
 #[derive(Debug)]
-pub struct Fs {
+pub struct FileStore {
     pub(crate) backend: BackendImplementation,
 }
 
-impl Fs {
-    fn check_path(&self, path: &FsPath, should_be_dir: bool) -> FsResult<()> {
+impl FileStore {
+    fn check_path(&self, path: &StoragePath, should_be_dir: bool) -> FsResult<()> {
         if !path.is_absolute() {
             Err(FsError::invalid_path(
                 path.clone(),
@@ -43,39 +45,39 @@ impl Fs {
         }
     }
 
-    /// Retrieves the back-end that this `Fs` is using.
+    /// Retrieves the back-end that this FileStore is using.
     pub(crate) fn backend_implementation(&self) -> &BackendImplementation {
         &self.backend
     }
 
-    /// Retrieves the type of back-end that this `Fs` is using.
+    /// Retrieves the type of back-end that this FileStore is using.
     pub fn backend_type(&self) -> Backend {
         self.backend.get().backend_type()
     }
 
-    /// Lists the files that start with the given path.
+    /// Lists the objects that are prefixes by the given path.
     ///
     /// Because the majority of cloud storage systems do not really have a
     /// notion of directories and files, just file identifiers, this function
-    /// will return any files that have an identifier prefixed by `path`.
-    pub fn list_files(&self, path: FsPath) -> FileListFuture {
+    /// will return any objects that have an identifier prefixed by `path`.
+    pub fn list_objects(&self, path: StoragePath) -> ObjectStreamFuture {
         if let Err(e) = self.check_path(&path, true) {
-            return FileListFuture::from_error(e);
+            return ObjectStreamFuture::from_result(Err(e));
         }
 
-        self.backend.get().list_files(path)
+        self.backend.get().list_objects(path)
     }
 
-    /// Gets info about the file at the given path.
+    /// Gets info about the object at the given path.
     ///
     /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
     /// error if the file does not exist.
-    pub fn get_file(&self, path: FsPath) -> FileFuture {
+    pub fn get_object(&self, path: StoragePath) -> ObjectFuture {
         if let Err(e) = self.check_path(&path, false) {
-            return FileFuture::from_error(e);
+            return ObjectFuture::from_result(Err(e));
         }
 
-        self.backend.get().get_file(path)
+        self.backend.get().get_object(path)
     }
 
     /// Gets a stream of data for the file at the given path.
@@ -86,27 +88,27 @@ impl Fs {
     ///
     /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
     /// error if the file does not exist.
-    pub fn get_file_stream(&self, path: FsPath) -> DataStreamFuture {
+    pub fn get_file_stream(&self, path: StoragePath) -> DataStreamFuture {
         if let Err(e) = self.check_path(&path, false) {
-            return DataStreamFuture::from_error(e);
+            return DataStreamFuture::from_result(Err(e));
         }
 
         self.backend.get().get_file_stream(path)
     }
 
-    /// Deletes the file at the given path.
+    /// Deletes the object at the given path.
     ///
     /// For backends that support physical directories this will also delete the
     /// directory and its contents.
     ///
     /// This will return a [`NotFound`](enum.FsErrorKind.html#variant.NotFound)
-    /// error if the file does not exist.
-    pub fn delete_file(&self, path: FsPath) -> OperationCompleteFuture {
+    /// error if the object does not exist.
+    pub fn delete_object(&self, path: StoragePath) -> OperationCompleteFuture {
         if let Err(e) = self.check_path(&path, false) {
-            return OperationCompleteFuture::from_error(e);
+            return OperationCompleteFuture::from_result(Err(e));
         }
 
-        self.backend.get().delete_file(path)
+        self.backend.get().delete_object(path)
     }
 
     /// Writes a stream of data to the file at the given path.
@@ -116,24 +118,30 @@ impl Fs {
     /// along with their contents and replaced with a file). The rationale for
     /// this is that for network based backends not overwriting generally
     /// involves more API calls to check if something is there first. If you
-    /// care about overwriting, call [`get_file`](struct.Fs.html#method.get_file)
+    /// care about overwriting, call [`get_file`](struct.FileStore.html#method.get_file)
     /// first.
     ///
     /// If this operation fails there are no guarantees about the state of the
     /// file. If that is an issue then you should consider always calling
-    /// [`delete_file`](struct.Fs.html#method.delete_file) after a failure.
+    /// [`delete_file`](struct.FileStore.html#method.delete_file) after a failure.
     ///
     /// The future returned will only resolve once all the data from the stream
     /// is succesfully written to storage. If the provided stream resolves to
     /// None at any point this will be considered the end of the data to be
     /// written.
-    pub fn write_from_stream<S, I>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
+    ///
+    /// Any error emitted by the stream will cause this operation to fail.
+    pub fn write_file_from_stream<S, I>(
+        &self,
+        path: StoragePath,
+        stream: S,
+    ) -> OperationCompleteFuture
     where
         S: Stream<Item = Result<I, io::Error>> + Send + 'static,
         I: IntoBuf,
     {
         if let Err(e) = self.check_path(&path, false) {
-            return OperationCompleteFuture::from_error(e);
+            return OperationCompleteFuture::from_result(Err(e));
         }
 
         #[allow(clippy::redundant_closure)]
@@ -141,6 +149,6 @@ impl Fs {
 
         self.backend
             .get()
-            .write_from_stream(path, StreamHolder::new(mapped))
+            .write_file_from_stream(path, WrappedStream::<FsResult<Data>>::from_stream(mapped))
     }
 }

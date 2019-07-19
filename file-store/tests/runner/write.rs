@@ -4,14 +4,14 @@ use std::io::{BufReader, ErrorKind, Read};
 use super::utils::*;
 use super::*;
 
-use cloud_fs::*;
+use file_store::*;
 
-pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> TestResult<()> {
-    async fn test_pass(fs: &Fs, context: &TestContext, path: &str) -> TestResult<()> {
-        let remote = FsPath::new(path)?;
+pub async fn test_delete_file(fs: &FileStore, context: &TestContext) -> TestResult<()> {
+    async fn test_pass(fs: &FileStore, context: &TestContext, path: &str) -> TestResult<()> {
+        let remote = StoragePath::new(path)?;
         let target = context.get_target(&remote);
 
-        fs.delete_file(remote).await?;
+        fs.delete_object(remote).await?;
 
         match metadata(target.clone()) {
             Ok(m) => {
@@ -30,11 +30,11 @@ pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> TestResult<()> 
         Ok(())
     }
 
-    async fn test_fail(fs: &Fs, context: &TestContext, path: &str) -> TestResult<()> {
-        let fspath = FsPath::new(path)?;
+    async fn test_fail(fs: &FileStore, context: &TestContext, path: &str) -> TestResult<()> {
+        let fspath = StoragePath::new(path)?;
         let target = context.get_target(&fspath);
 
-        match fs.delete_file(fspath.clone()).await {
+        match fs.delete_object(fspath.clone()).await {
             Ok(()) => test_fail!("Should have failed to delete {}", fspath),
             Err(e) => test_assert_eq!(
                 e.kind(),
@@ -62,18 +62,18 @@ pub async fn test_delete_file(fs: &Fs, context: &TestContext) -> TestResult<()> 
     Ok(())
 }
 
-pub async fn test_write_from_stream(fs: &Fs, context: &TestContext) -> TestResult<()> {
+pub async fn test_write_from_stream(fs: &FileStore, context: &TestContext) -> TestResult<()> {
     async fn test_write(
-        fs: &Fs,
+        fs: &FileStore,
         context: &TestContext,
         path: &str,
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote = FsPath::new(path)?;
+        let remote = StoragePath::new(path)?;
         let target = context.get_target(&remote);
 
-        fs.write_from_stream(
+        fs.write_file_from_stream(
             remote.clone(),
             stream_iterator(ContentIterator::new(seed, length), (length / 10) as usize),
         )

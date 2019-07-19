@@ -1,11 +1,11 @@
-# cloud-fs
+# file-store
 
-[![Build Status](https://travis-ci.org/FractalBrew/cloud-fs.svg?branch=master)](https://travis-ci.org/FractalBrew/cloud-fs)
-[![Coverage Status](https://coveralls.io/repos/github/FractalBrew/cloud-fs/badge.svg?branch=master)](https://coveralls.io/github/FractalBrew/cloud-fs?branch=master)
+[![Build Status](https://travis-ci.org/FractalBrew/file-store-rs.svg?branch=master)](https://travis-ci.org/FractalBrew/file-store-rs)
+[![Coverage Status](https://coveralls.io/repos/github/FractalBrew/file-store-rs/badge.svg?branch=master)](https://coveralls.io/github/FractalBrew/file-store-rs?branch=master)
 
-`cloud-fs` is a Rust library providing asynchronous access to filesystems that may be hosted locally or remotely. Different backends provide access to different types of filesystems including local files and files held on cloud storage.
+`file-store` is a Rust library providing asynchronous file storage. The files may be hosted locally or remotely. Different backends provide access to different storage systems including the local filesystem and storage in various cloud providers.
 
-Aside from the code used to instantiate a backend (and even that is pretty similar) the actual API for reading and writing files to the backend is identical.
+The public API for reading and writing files is identical regardless of the chosen storage backend..
 
 ## Backends
 

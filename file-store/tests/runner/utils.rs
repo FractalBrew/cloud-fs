@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use bytes::{BufMut, BytesMut};
 use futures::stream::Stream;
 
-use cloud_fs::*;
+use file_store::*;
 
 use super::{IntoTestResult, TestResult};
 

@@ -1,5 +1,5 @@
 [workspace]
 members = [
-    "cloud-fs",
+    "file-store",
     "cli",
 ]
