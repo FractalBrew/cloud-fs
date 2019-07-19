@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use ::futures::stream::Stream;
 use bytes::{BufMut, BytesMut};
+use futures::stream::Stream;
 
 use cloud_fs::*;
 

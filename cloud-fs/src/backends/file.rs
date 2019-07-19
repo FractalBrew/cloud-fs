@@ -7,19 +7,19 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use ::futures::compat::*;
-use ::futures::future::{ready, FutureExt, TryFutureExt};
-use ::futures::stream::{once, Stream, StreamExt, TryStreamExt};
+use futures::compat::*;
+use futures::future::{ready, Future, FutureExt, TryFutureExt};
+use futures::stream::{once, Stream, StreamExt, TryStreamExt};
 use bytes::BytesMut;
 use tokio::io::{write_all, AsyncRead as TokioAsyncRead};
 use tokio::prelude::stream::Stream as TokioStream;
 use tokio::prelude::Async as TokioAsync;
 use tokio_fs::{read_dir, remove_dir, remove_file, symlink_metadata, DirEntry, File};
 
-use super::BackendImplementation;
-use crate::futures::MergedStreams;
-use crate::types::{Data, FsFile, FsFileType, FsPath};
-use crate::*;
+use super::{FsImpl, Backend, BackendImplementation};
+use crate::types::stream::{StreamHolder, MergedStreams, FsStreamPoll};
+use crate::types::*;
+use crate::fs::Fs;
 
 // How many bytes to attempt to read from a file at a time.
 const BUFFER_SIZE: usize = 20 * 1024 * 1024;
@@ -205,7 +205,7 @@ impl TokioStream for FileReadStream {
     type Item = Data;
     type Error = FsError;
 
-    fn poll(&mut self) -> Result<TokioAsync<Option<Bytes>>, FsError> {
+    fn poll(&mut self) -> Result<TokioAsync<Option<Data>>, FsError> {
         let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
         match self.file.read_buf(&mut buffer) {
             Ok(TokioAsync::Ready(0)) => Ok(TokioAsync::Ready(None)),

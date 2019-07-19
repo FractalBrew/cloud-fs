@@ -1,63 +1,17 @@
-use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::future::ready;
-use futures::stream::{BoxStream, Stream};
+use futures::stream::Stream;
 
-use crate::types::*;
-use crate::Fs;
+use super::*;
 
-pub(crate) type FsPoll<R> = Poll<FsResult<R>>;
-pub(crate) type FsStreamPoll<R> = Poll<Option<FsResult<R>>>;
+pub(crate) type StreamPoll<R> = Poll<Option<R>>;
+pub(crate) type FsStreamPoll<R> = StreamPoll<FsResult<R>>;
 
-pub(crate) type FsPinned<R> = Pin<Box<dyn Future<Output = FsResult<R>> + Send + 'static>>;
-pub(crate) type FsStreamPinned<R> = Pin<Box<dyn Stream<Item = FsResult<R>> + Send + 'static>>;
+pub(crate) type StreamPinned<R> = Pin<Box<dyn Stream<Item = R> + Send + 'static>>;
+pub(crate) type FsStreamPinned<R> = StreamPinned<FsResult<R>>;
 
-/// A Future whose error is always an [`FsError'](struct.FsError.html).
-///
-/// This is mostly used to hide the underlying futures in use which may change
-/// frequently.
-pub struct FsFuture<R>
-where
-    R: Send + 'static,
-{
-    base: FsPinned<R>,
-}
-
-impl<R> FsFuture<R>
-where
-    R: Send + 'static,
-{
-    pub(crate) fn from_future<F>(base: F) -> Self
-    where
-        F: Future<Output = FsResult<R>> + Send + 'static,
-    {
-        FsFuture {
-            base: Box::pin(base),
-        }
-    }
-
-    pub(crate) fn from_error<E>(error: E) -> Self
-    where
-        E: Into<FsError>,
-    {
-        FsFuture::from_future(ready(Err(error.into())))
-    }
-}
-
-impl<R> Future for FsFuture<R>
-where
-    R: Send + 'static,
-{
-    type Output = FsResult<R>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> FsPoll<R> {
-        self.base.as_mut().poll(cx)
-    }
-}
-
-/// A Stream whose error is always an [`FsError'](struct.FsError.html).
+/// A Stream whose error is always an [`FsError`](struct.FsError.html).
 ///
 /// This is mostly used to hide the underlying streams in use which may change
 /// frequently.
@@ -93,25 +47,10 @@ where
     }
 }
 
-/// A stream that returns Bytes.
-pub type DataStream = FsStream<Data>;
-/// A future that returns a [`Fs`](struct.Fs.html) implementation.
-pub type ConnectFuture = FsFuture<Fs>;
-/// A stream that returns [`FsFile`s](struct.FsFile.html).
-pub type FileListStream = FsStream<FsFile>;
-/// A future that returns a [`FileListStream`](type.FileListStream.html).
-pub type FileListFuture = FsFuture<FileListStream>;
-/// A future that returns a [`FsFile`](type.FsFile.html).
-pub type FileFuture = FsFuture<FsFile>;
-/// A future that just resolves when whatever operation is complete.
-pub type OperationCompleteFuture = FsFuture<()>;
-/// A future that resolves to a [`DataStream`](type.DataStream.html).
-pub type DataStreamFuture = FsFuture<DataStream>;
-
 /// Holds an instance of `Stream`. This can be useful when you want to simplify
 /// the types you're working with.
 pub struct StreamHolder<R> {
-    stream: BoxStream<'static, R>,
+    stream: StreamPinned<R>,
 }
 
 impl<R> StreamHolder<R> {
@@ -129,7 +68,7 @@ impl<R> StreamHolder<R> {
 impl<R> Stream for StreamHolder<R> {
     type Item = R;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<R>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> StreamPoll<R> {
         self.stream.as_mut().poll_next(cx)
     }
 }
@@ -166,7 +105,7 @@ impl<R> MergedStreams<R> {
 impl<R> Stream for MergedStreams<R> {
     type Item = R;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<R>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> StreamPoll<R> {
         if self.streams.is_empty() {
             return Poll::Ready(None);
         }

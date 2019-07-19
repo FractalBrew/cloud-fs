@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs::metadata;
 use std::path::{Path, PathBuf};
 
-use crate::types::{FsError, FsResult};
+use super::*;
 
 const PARENT_DIR: &str = "..";
 const CURRENT_DIR: &str = ".";

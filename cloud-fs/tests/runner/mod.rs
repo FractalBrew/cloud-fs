@@ -173,15 +173,13 @@ macro_rules! make_test {
     ($backend:expr, $pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
         #[test]
         fn $name() {
-            async fn test() -> crate::runner::TestResult<()> {
+            let result: Result<crate::runner::TestResult<()>, std::sync::mpsc::TryRecvError> = cloud_fs::executor::run(async {
                 let test_context = crate::runner::prepare_test($backend)?;
                 let (fs, backend_context) = $setup(&test_context).await?;
                 crate::runner::$pkg::$name(&fs, &test_context).await?;
                 $cleanup(backend_context).await;
                 Ok(())
-            }
-
-            let result = cloud_fs::executor::run(Box::pin(test()));
+            });
 
             match result {
                 Ok(Ok(())) => (),
