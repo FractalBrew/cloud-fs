@@ -21,5 +21,5 @@ pub mod executor;
 mod fs;
 mod types;
 
-pub use types::*;
 pub use fs::Fs;
+pub use types::*;

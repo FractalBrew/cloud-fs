@@ -7,13 +7,13 @@
 
 extern crate tokio;
 
+use std::boxed::Box;
 use std::future::Future;
 use std::sync::mpsc;
-use std::boxed::Box;
 
+use futures::channel::oneshot;
 use futures::compat::Compat;
 use futures::future::FutureExt;
-use futures::channel::oneshot;
 
 /// Runs a future on the existing runtime.
 pub fn spawn<F>(future: F) -> impl Future<Output = Result<F::Output, oneshot::Canceled>>
