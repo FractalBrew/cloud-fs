@@ -5,7 +5,6 @@ use futures::stream::{StreamExt, TryStreamExt};
 use super::utils::*;
 use super::*;
 
-use cloud_fs::backends::BackendImplementation;
 use cloud_fs::*;
 
 fn compare_file(
@@ -83,7 +82,7 @@ pub async fn test_list_files(fs: &Fs, _context: &TestContext) -> TestResult<()> 
         ("/dir2/yu", FsFileType::File, 0),
     ];
 
-    if let BackendImplementation::File(_) = fs.backend() {
+    if fs.backend_type() == Backend::File {
         allfiles.extend(vec![
             ("/dir2/", FsFileType::Directory, 0),
             ("/maybedir/", FsFileType::Directory, 0),
@@ -157,7 +156,7 @@ pub async fn test_get_file(fs: &Fs, _context: &TestContext) -> TestResult<()> {
     test_fail(fs, "/daz").await?;
     test_fail(fs, "/foo/bar").await?;
 
-    if let BackendImplementation::File(_) = fs.backend() {
+    if fs.backend_type() == Backend::File {
         test_pass(fs, "/maybedir", FsFileType::Directory, 0).await?;
     } else {
         test_fail(fs, "/dir2").await?;

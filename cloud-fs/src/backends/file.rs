@@ -3,13 +3,13 @@ extern crate tokio_fs;
 
 use std::fs::Metadata;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use ::futures::compat::*;
 use ::futures::future::{ready, FutureExt, TryFutureExt};
-use ::futures::stream::{once, Stream, TryStreamExt};
+use ::futures::stream::{once, Stream, StreamExt, TryStreamExt};
 use bytes::BytesMut;
 use tokio::io::{write_all, AsyncRead as TokioAsyncRead};
 use tokio::prelude::stream::Stream as TokioStream;
@@ -245,51 +245,54 @@ async fn delete_directory(space: FileSpace, path: FsPath) -> FsResult<()> {
     wrap_future(remove_dir(target).compat(), path).await
 }
 
-/// The backend implementation for local file storage.
+/// The backend implementation for local file storage. Only included when the
+/// `file` feature is enabled.
 #[derive(Debug)]
 pub struct FileBackend {
     space: FileSpace,
-    settings: FsSettings,
 }
 
 impl FileBackend {
     /// Creates a new instance of the file backend.
     ///
-    /// The authentication and address parts of the settings are ignored. The
-    /// path is interpreted as a local and then used as the root of the
-    /// filesystem accessed by the created [`Fs`](../struct.Fs.html).
-    pub fn connect(settings: FsSettings) -> ConnectFuture {
-        ConnectFuture::from_future(async {
-            let space = FileSpace {
-                base: settings.path.clone(),
-            };
-            let target = space.get_std_path(&FsPath::new("/")?)?;
-            symlink_metadata(target)
-                .compat()
-                .map(|r| match r {
-                    Ok(meta) => {
-                        if !meta.is_dir() {
-                            Err(FsError::invalid_path(
-                                settings.path,
-                                "Path setting was not a directory.",
-                            ))
-                        } else {
-                            Ok(Fs {
-                                backend: BackendImplementation::File(FileBackend {
-                                    space,
-                                    settings,
-                                }),
-                            })
-                        }
-                    }
-                    Err(e) => Err(get_fserror(e, settings.path)),
+    /// The root path provided must be a directory and is used as the base of
+    /// the filesystem visible.
+    pub fn connect(root: &Path) -> ConnectFuture {
+        let target = root.to_owned();
+        ConnectFuture::from_future(async move {
+            let path = FsPath::from_std_path(&target)?;
+
+            let metadata =
+                wrap_future(symlink_metadata(target.clone()).compat(), path.clone()).await?;
+            if !metadata.is_dir() {
+                Err(FsError::invalid_settings("Root path is not a directory."))
+            } else {
+                Ok(Fs {
+                    backend: BackendImplementation::File(FileBackend {
+                        space: FileSpace { base: path },
+                    }),
                 })
-                .await
+            }
         })
+    }
+
+    /// Allows access to the `FileBackend` that the passed `[`Fs`](../struct.Fs.html) is using.
+    ///
+    /// Returns an error if the [`Fs`](../struct.Fs.html) is using a different backend.
+    #[allow(unreachable_patterns)]
+    pub fn from_fs(fs: &Fs) -> Result<&FileBackend, ()> {
+        match fs.backend_implementation() {
+            BackendImplementation::File(b) => Ok(&b),
+            _ => Err(()),
+        }
     }
 }
 
 impl FsImpl for FileBackend {
+    fn backend_type(&self) -> Backend {
+        Backend::File
+    }
+
     fn list_files(&self, path: FsPath) -> FileListFuture {
         async fn list(space: FileSpace, path: FsPath) -> FsResult<FileListStream> {
             Ok(FileListStream::from_stream(FileLister::list(space, path)))

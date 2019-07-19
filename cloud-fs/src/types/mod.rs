@@ -6,7 +6,6 @@ use std::fmt;
 
 use bytes::Bytes;
 
-use crate::backends::Backend;
 pub use path::FsPath;
 
 /// The data type used for streaming data from and to files.
@@ -27,7 +26,7 @@ pub enum FsErrorKind {
     NotFound(FsPath),
     /// An error returned if the [`FsSettings`](struct.FsSettings.html) is
     /// invalid in some way.
-    InvalidSettings(FsSettings),
+    InvalidSettings,
     /// An unknown error type, usually a marker that this `FsError` was
     /// generated from a different error type.
     Unknown,
@@ -73,9 +72,9 @@ impl FsError {
         }
     }
 
-    pub(crate) fn invalid_settings(settings: FsSettings, description: &str) -> FsError {
+    pub(crate) fn invalid_settings(description: &str) -> FsError {
         FsError {
-            kind: FsErrorKind::InvalidSettings(settings),
+            kind: FsErrorKind::InvalidSettings,
             description: description.to_owned(),
         }
     }
@@ -164,51 +163,6 @@ pub(crate) struct Auth {
     pub password: String,
 }
 */
-/// Settings used to create an [`Fs`](struct.Fs.html) instance.
-///
-/// Different backends may interpret these settings in different ways. Check
-/// the [`backends`](backends/index.html) for specific details.
-#[derive(Clone, Debug, PartialEq)]
-pub struct FsSettings {
-    pub(crate) backend: Backend,
-    //pub(crate) address: Option<Address>,
-    //pub(crate) auth: Option<Auth>,
-    pub(crate) path: FsPath,
-}
-
-impl FsSettings {
-    /// Creates settings for a specific backend with a given [`FsPath`](struct.FsPath.html).
-    pub fn new(backend: Backend, path: FsPath) -> FsSettings {
-        FsSettings {
-            backend,
-            //address: None,
-            //auth: None,
-            path,
-        }
-    }
-
-    /*
-    /// Sets the address for the [`Fs`](struct.Fs.html).
-    pub fn set_address<A>(&mut self, address: A)
-    where
-        A: Into<Address>,
-    {
-        self.address = Some(address.into());
-    }
-
-    /// Sets the authentication information for the [`Fs`](struct.Fs.html).
-    pub fn set_authentication(&mut self, username: &str, password: &str) {
-        self.auth = Some(Auth {
-            username: username.to_owned(),
-            password: password.to_owned(),
-        });
-    }*/
-
-    /// Gets this setting's current [`Backend`](backends/enum.Backend.html).
-    pub fn backend(&self) -> &Backend {
-        &self.backend
-    }
-}
 
 /// A file's type. For most backends this will just be File.
 ///

@@ -4,13 +4,12 @@ mod file;
 
 use std::fmt;
 
-use crate::{ConnectFuture, FsImpl, FsSettings};
-
+use crate::FsImpl;
 #[cfg(feature = "file")]
 pub use file::FileBackend;
 
 /// An enumeration of the available backends.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Backend {
     #[cfg(feature = "file")]
     /// The (file backend)[file/index.html]. Included with the "file" feature.
@@ -28,7 +27,7 @@ impl fmt::Display for Backend {
 
 /// Holds a backend implementation.
 #[derive(Debug)]
-pub enum BackendImplementation {
+pub(crate) enum BackendImplementation {
     #[cfg(feature = "file")]
     /// The (file backend)[struct.FileBackend.html].
     File(FileBackend),
@@ -40,12 +39,5 @@ impl BackendImplementation {
             #[cfg(feature = "file")]
             BackendImplementation::File(ref fs) => Box::new(fs),
         }
-    }
-}
-
-pub(crate) fn connect(settings: FsSettings) -> ConnectFuture {
-    match settings.backend() {
-        #[cfg(feature = "file")]
-        Backend::File => FileBackend::connect(settings),
     }
 }

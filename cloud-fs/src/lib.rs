@@ -6,11 +6,11 @@
 //!
 //! Obviously offering the same API across all backends means the API is fairly
 //! basic, but if all you want to do is write, read or list files it should be
-//! plenty.
+//! plenty. Past that some of the backends provide access to internal functions
+//! via a `from_fs` function.
 //!
 //! Which backend is available depends on the features cloud-fs is compiled
-//! with, by default all are included. See the [backends module](backends/index.html)
-//! for a list of the backends.
+//! with. See the [`backends`](backends/index.html) module.
 //!
 //! The [`Fs`](struct.Fs.html) is the main API used to access storage.
 #![warn(missing_docs)]
@@ -27,18 +27,21 @@ mod types;
 use std::future::Future;
 use std::io;
 
-use ::futures::stream::{StreamExt, TryStream, TryStreamExt};
+use ::futures::stream::{Stream, TryStreamExt};
 use bytes::buf::FromBuf;
 use bytes::{Bytes, IntoBuf};
 
 use crate::futures::*;
-use backends::connect;
-use backends::*;
+use backends::Backend;
+use backends::BackendImplementation;
 
-pub use types::{Data, FsError, FsErrorKind, FsFile, FsFileType, FsPath, FsResult, FsSettings};
+pub use types::{Data, FsError, FsErrorKind, FsFile, FsFileType, FsPath, FsResult};
 
 /// The trait that every storage backend must implement at a minimum.
 trait FsImpl {
+    /// Returns the type of backend.
+    fn backend_type(&self) -> Backend;
+
     /// Lists the files that start with the given path.
     ///
     /// See [Fs.list_files](struct.Fs.html#method.list_files).
@@ -70,6 +73,8 @@ trait FsImpl {
 }
 
 /// The main implementation used to interact with a storage backend.
+///
+/// Create an `Fs` from one of the alternative [`backends`](backends/index.html).
 #[derive(Debug)]
 pub struct Fs {
     backend: BackendImplementation,
@@ -102,30 +107,14 @@ impl Fs {
         }
     }
 
-    /// Connect to a `Fs` based on the settings passed.
-    pub fn connect(settings: FsSettings) -> ConnectFuture {
-        if !settings.path.is_absolute() {
-            return ConnectFuture::from_error(FsError::invalid_settings(
-                settings,
-                "Fs must be initialized with an absolute path.",
-            ));
-        } else if !settings.path.is_directory() {
-            return ConnectFuture::from_error(FsError::invalid_settings(
-                settings,
-                "Fs must be initialized with a directory path.",
-            ));
-        }
-
-        connect(settings)
+    /// Retrieves the back-end that this `Fs` is using.
+    pub(crate) fn backend_implementation(&self) -> &BackendImplementation {
+        &self.backend
     }
 
-    /// Retrieves the back-end that this `Fs` is using.
-    ///
-    /// This is generally only useful for accessing back-end specific
-    /// functionality. If you want to develop a truly back-end agnostic app then
-    /// you should avoid calling this.
-    pub fn backend(&self) -> &BackendImplementation {
-        &self.backend
+    /// Retrieves the type of back-end that this `Fs` is using.
+    pub fn backend_type(&self) -> Backend {
+        self.backend.get().backend_type()
     }
 
     /// Lists the files that start with the given path.
@@ -204,7 +193,7 @@ impl Fs {
     /// written.
     pub fn write_from_stream<S, I>(&self, path: FsPath, stream: S) -> OperationCompleteFuture
     where
-        S: TryStream<Ok = I, Error = io::Error> + Send + 'static,
+        S: Stream<Item = Result<I, io::Error>> + Send + 'static,
         I: IntoBuf,
     {
         if let Err(e) = self.check_path(&path, false) {
