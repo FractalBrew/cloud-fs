@@ -2,6 +2,7 @@ language: rust
 
 os:
   - linux
+  - windows
   - osx
 
 addons:
@@ -11,6 +12,11 @@ addons:
 
 rust:
   - nightly
+
+matrix:
+  fast_finish: true
+  allow_failures:
+    - os: windows
 
 cache: cargo
 
