@@ -2,7 +2,6 @@ language: rust
 
 os:
   - linux
-  - windows
   - osx
 
 addons:
@@ -20,7 +19,7 @@ install:
   - rustup component add rustfmt
 
 script:
-#  - cargo -q clippy --all --message-format short --tests -- -D warnings
+  - cargo -q clippy --all --message-format short --tests -- -D warnings
   - cargo test --verbose --all
   - cargo fmt --all -- --check
 
