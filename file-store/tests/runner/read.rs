@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::iter::empty;
 
 use futures::stream::{StreamExt, TryStreamExt};
@@ -139,8 +140,8 @@ pub async fn test_get_file(fs: &FileStore, _context: &TestContext) -> TestResult
         test_assert!(result.is_err(), "Should have failed to find {}.", fspath);
         if let Err(e) = result {
             test_assert_eq!(
-                e.kind(),
-                StorageErrorKind::NotFound(fspath),
+                e.try_into(),
+                Ok(StorageErrorKind::NotFound(fspath)),
                 "Should have returned a NotFound error."
             );
         }
@@ -220,7 +221,7 @@ pub async fn test_get_file_stream(fs: &FileStore, context: &TestContext) -> Test
         let result = fs.get_file_stream(target.clone()).await;
         test_assert!(result.is_err());
         if let Err(e) = result {
-            test_assert_eq!(e.kind(), StorageErrorKind::NotFound(target));
+            test_assert_eq!(e.try_into(), Ok(StorageErrorKind::NotFound(target)));
         }
 
         Ok(())

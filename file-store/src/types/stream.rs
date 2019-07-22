@@ -1,14 +1,13 @@
 //! A module with some useful tools for working with streams.
 
+use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::stream::Stream;
 
-use super::*;
-
 pub(crate) type StreamPoll<R> = Poll<Option<R>>;
-pub(crate) type ResultStreamPoll<R> = StreamPoll<StorageResult<R>>;
+pub(crate) type ResultStreamPoll<R> = StreamPoll<io::Result<R>>;
 
 pub(crate) type PinnedStream<R> = Pin<Box<dyn Stream<Item = R> + Send + 'static>>;
 

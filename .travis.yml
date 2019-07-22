@@ -26,7 +26,7 @@ install:
 
 script:
   - cargo -q clippy --all --message-format short --tests -- -D warnings
-  - cargo test --verbose --all
+  - cargo test --verbose --all -- --test-threads 1
   - cargo fmt --all -- --check
 
 before_cache: |
@@ -36,5 +36,5 @@ before_cache: |
 
 after_success: |
   if [[ "$TRAVIS_RUST_VERSION" == "nightly" && "$TRAVIS_OS_NAME" == "linux" ]]; then
-    cargo tarpaulin --ciserver travis-ci --coveralls $TRAVIS_JOB_ID
+    cargo tarpaulin --ciserver travis-ci --coveralls $TRAVIS_JOB_ID --ignore-tests
   fi

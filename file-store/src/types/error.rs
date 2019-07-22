@@ -1,98 +1,166 @@
-use std::error::Error;
+use std::convert::TryFrom;
+use std::error;
 use std::fmt;
+use std::io;
 
-use super::*;
+use super::StoragePath;
 
-/// The type of a [`StorageError`](struct.StorageError.html).
+/// The kind of an [`StorageError`](struct.StorageError.html).
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageErrorKind {
-    /// An error that occuring while parsing or manipulating a
-    /// [`StoragePath`](struct.StoragePath.html].
-    ParseError(String),
-
-    // An error a backend may return if an invalid storage host was requested.
-    // AddressNotSupported(Address),
     /// An error returned when attempting to access an invalid path.
     InvalidPath(StoragePath),
     /// The object requested was not found.
     NotFound(StoragePath),
-    /// An error returned if configuration for a backend was invalid somehow.
+    /// The service returned some invalid data.
+    InvalidData,
+    /// An error returned if the configuration for a backend was invalid
+    /// somehow.
     InvalidSettings,
-    /// An unknown error type, usually a marker that this `StorageError` was
-    /// generated from a different error type.
-    Unknown,
 }
 
-/// The main error type used throughout this crate.
+/// Errors hit while interacting with storage backends. Generally wrapped by an
+/// `io::Error`. Can be reached with `TryFrom`.
 #[derive(Clone, Debug)]
 pub struct StorageError {
     kind: StorageErrorKind,
-    description: String,
+    detail: String,
 }
 
 impl StorageError {
-    pub(crate) fn parse_error(source: &str, description: &str) -> StorageError {
-        StorageError {
-            kind: StorageErrorKind::ParseError(source.to_owned()),
-            description: format!(
-                "Failed while parsing '{}': {}",
-                source,
-                description.to_owned()
-            ),
-        }
-    }
-
-    /*pub(crate) fn address_not_supported(address: &Address, description: &str) -> StorageError {
-        StorageError {
-            kind: StorageErrorKind::AddressNotSupported(address.clone()),
-            description: description.to_owned(),
-        }
-    }*/
-
-    pub(crate) fn invalid_path(path: StoragePath, description: &str) -> StorageError {
-        StorageError {
-            description: format!("Path '{}' was invalid: {}", path, description),
-            kind: StorageErrorKind::InvalidPath(path),
-        }
-    }
-
-    pub(crate) fn not_found(path: StoragePath) -> StorageError {
-        StorageError {
-            description: format!("File at '{}' was not found.", path),
-            kind: StorageErrorKind::NotFound(path),
-        }
-    }
-
-    pub(crate) fn invalid_settings(description: &str) -> StorageError {
-        StorageError {
-            kind: StorageErrorKind::InvalidSettings,
-            description: description.to_owned(),
-        }
-    }
-
-    pub(crate) fn unknown<E>(error: E) -> StorageError
-    where
-        E: Error,
-    {
-        StorageError {
-            kind: StorageErrorKind::Unknown,
-            description: format!("{}", error),
-        }
-    }
-
-    /// Gets the [`StorageErrorKind`](enum.StorageErrorKind.html) of this `StorageError`.
+    /// Returns the storage error kind.
     pub fn kind(&self) -> StorageErrorKind {
         self.kind.clone()
     }
 }
 
+impl error::Error for StorageError {}
+
+macro_rules! write {
+    ($f:expr, $($info:tt)*) => {
+        $f.write_fmt(format_args!($($info)*))
+    };
+}
+
 impl fmt::Display for StorageError {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str(&self.description)
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.kind {
+            StorageErrorKind::InvalidPath(p) => write!(f, "The path '{}' was invalid", p),
+            StorageErrorKind::NotFound(p) => write!(f, "The path '{}' was not found", p),
+            StorageErrorKind::InvalidData => write!(f, "Invalid data: {}", &self.detail),
+            StorageErrorKind::InvalidSettings => write!(
+                f,
+                "Some of the settings passed were invalid: {}",
+                &self.detail
+            ),
+        }
     }
 }
 
-impl Error for StorageError {}
+impl TryFrom<io::Error> for StorageError {
+    type Error = ();
 
-/// A simple alias for a `Result` where the error is a [`StorageError`](struct.StorageError.html).
-pub type StorageResult<R> = Result<R, StorageError>;
+    fn try_from(error: io::Error) -> Result<StorageError, ()> {
+        match error.into_inner() {
+            Some(e) => match e.downcast_ref::<StorageError>() {
+                Some(se) => Ok(se.clone()),
+                None => Err(()),
+            },
+            None => Err(()),
+        }
+    }
+}
+
+impl TryFrom<io::Error> for StorageErrorKind {
+    type Error = ();
+
+    fn try_from(error: io::Error) -> Result<StorageErrorKind, ()> {
+        match error.into_inner() {
+            Some(e) => match e.downcast_ref::<StorageError>() {
+                Some(se) => Ok(se.kind()),
+                None => Err(()),
+            },
+            None => Err(()),
+        }
+    }
+}
+
+/// An error encountered when parsing or manipulating an [`ObjectPath`](../struct.ObjectPath.html).
+#[derive(Clone, Debug)]
+pub struct ObjectPathError {
+    spec: String,
+    message: String,
+}
+
+impl error::Error for ObjectPathError {}
+
+impl fmt::Display for ObjectPathError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_fmt(format_args!(
+            "Failed to parse '{}'. {}",
+            &self.spec, &self.message
+        ))
+    }
+}
+
+impl From<ObjectPathError> for io::Error {
+    fn from(error: ObjectPathError) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, error)
+    }
+}
+
+/// An error that occurs while copying a file.
+#[derive(Debug)]
+pub enum TransferError {
+    /// An error that came from the source of the transfer.
+    SourceError(io::Error),
+    /// An error that occured when writing to the target.
+    TargetError(io::Error),
+}
+
+pub fn parse_error(spec: &str, message: &str) -> ObjectPathError {
+    ObjectPathError {
+        spec: spec.to_owned(),
+        message: message.to_owned(),
+    }
+}
+
+pub fn invalid_path(path: StoragePath, detail: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        StorageError {
+            kind: StorageErrorKind::InvalidPath(path),
+            detail: detail.to_owned(),
+        },
+    )
+}
+
+pub fn not_found(path: StoragePath) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        StorageError {
+            kind: StorageErrorKind::NotFound(path),
+            detail: String::new(),
+        },
+    )
+}
+
+pub fn invalid_settings(detail: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        StorageError {
+            kind: StorageErrorKind::InvalidSettings,
+            detail: detail.to_owned(),
+        },
+    )
+}
+
+pub fn invalid_data(detail: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        StorageError {
+            kind: StorageErrorKind::InvalidData,
+            detail: detail.to_owned(),
+        },
+    )
+}

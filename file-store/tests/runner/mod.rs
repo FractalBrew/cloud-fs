@@ -7,6 +7,7 @@ pub mod write;
 
 use std::fmt;
 use std::fs::create_dir_all;
+use std::io;
 use std::iter::empty;
 use std::path::PathBuf;
 
@@ -21,7 +22,9 @@ pub type TestResult<I> = Result<I, TestError>;
 
 #[derive(Debug)]
 pub enum TestError {
-    Unexpected(Box<StorageError>),
+    UnexpectedIOError(io::Error),
+    UnexpectedPathError(ObjectPathError),
+    UnexpectedTransferError(TransferError),
     HarnessFailure(String),
     TestFailure(String),
 }
@@ -38,18 +41,41 @@ impl TestError {
 impl fmt::Display for TestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TestError::Unexpected(error) => {
-                f.write_fmt(format_args!("Unexpected StorageError thrown: {}", error))
+            TestError::UnexpectedIOError(error) => {
+                f.write_fmt(format_args!("Unexpected IO error thrown: {}", error))
             }
+            TestError::UnexpectedPathError(error) => {
+                f.write_fmt(format_args!("Unexpected path error thrown: {}", error))
+            }
+            TestError::UnexpectedTransferError(error) => match error {
+                TransferError::SourceError(e) => {
+                    f.write_fmt(format_args!("Unexpected source error thrown: {}", e))
+                }
+                TransferError::TargetError(e) => {
+                    f.write_fmt(format_args!("Unexpected target error thrown: {}", e))
+                }
+            },
             TestError::HarnessFailure(message) => f.write_str(message),
             TestError::TestFailure(message) => f.write_str(message),
         }
     }
 }
 
-impl From<StorageError> for TestError {
-    fn from(error: StorageError) -> TestError {
-        TestError::Unexpected(Box::new(error))
+impl From<io::Error> for TestError {
+    fn from(error: io::Error) -> TestError {
+        TestError::UnexpectedIOError(error)
+    }
+}
+
+impl From<ObjectPathError> for TestError {
+    fn from(error: ObjectPathError) -> TestError {
+        TestError::UnexpectedPathError(error)
+    }
+}
+
+impl From<TransferError> for TestError {
+    fn from(error: TransferError) -> TestError {
+        TestError::UnexpectedTransferError(error)
     }
 }
 
@@ -212,6 +238,22 @@ macro_rules! build_tests {
             $backend,
             read,
             test_get_file_stream,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
+        make_test!(
+            $backend,
+            write,
+            test_copy_file,
+            $allow_incomplete,
+            $setup,
+            $cleanup
+        );
+        make_test!(
+            $backend,
+            write,
+            test_move_file,
             $allow_incomplete,
             $setup,
             $cleanup

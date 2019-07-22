@@ -3,12 +3,12 @@
 mod file;
 
 use std::fmt;
-use std::io;
+
+use futures::future::TryFutureExt;
 
 #[cfg(feature = "file")]
 pub use file::FileBackend;
 
-use crate::types::stream::WrappedStream;
 use crate::types::*;
 
 /// An enumeration of the available backends.
@@ -28,8 +28,23 @@ impl fmt::Display for Backend {
     }
 }
 
+macro_rules! call_backend {
+    ($backend:expr, $method:ident) => {
+        match $backend {
+            #[cfg(feature = "file")]
+            BackendImplementation::File(b) => b.$method(),
+        }
+    };
+    ($backend:expr, $method:ident, $($arg:expr),*) => {
+        match $backend {
+            #[cfg(feature = "file")]
+            BackendImplementation::File(b) => b.$method($($arg,)*),
+        }
+    };
+}
+
 /// Holds a backend implementation.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum BackendImplementation {
     #[cfg(feature = "file")]
     /// The [file backend](struct.FileBackend.html).
@@ -37,7 +52,7 @@ pub(crate) enum BackendImplementation {
 }
 
 /// The trait that every storage backend must implement at a minimum.
-pub(crate) trait StorageImpl {
+pub(crate) trait StorageImpl: Clone + Send + 'static {
     /// Returns the type of backend.
     fn backend_type(&self) -> Backend;
 
@@ -57,6 +72,26 @@ pub(crate) trait StorageImpl {
     /// See [`FileStore.get_file_stream`](../struct.FileStore.html#method.get_file_stream).
     fn get_file_stream(&self, path: StoragePath) -> DataStreamFuture;
 
+    /// Copies a file to a new path.
+    ///
+    /// See [`FileStore.copy_file`](../struct.FileStore.html#method.copy_file).
+    fn copy_file(&self, path: StoragePath, target: StoragePath) -> CopyCompleteFuture {
+        let source = DataStream::from_stream(self.get_file_stream(path).try_flatten_stream());
+        self.write_file_from_stream(target, source)
+    }
+
+    /// Moves a file to a new path.
+    ///
+    /// See [`FileStore.move_file`](../struct.FileStore.html#method.move_file).
+    fn move_file(&self, path: StoragePath, target: StoragePath) -> MoveCompleteFuture {
+        let deleter = self.clone();
+        MoveCompleteFuture::from_future(self.copy_file(path.clone(), target).and_then(move |()| {
+            deleter
+                .delete_object(path)
+                .map_err(TransferError::SourceError)
+        }))
+    }
+
     /// Deletes the object at the given path.
     ///
     /// See [`FileStore.delete_object`](../struct.FileStore.html#method.delete_object).
@@ -65,18 +100,5 @@ pub(crate) trait StorageImpl {
     /// Writes a stream of data the the file at the given path.
     ///
     /// See [`FileStore.write_file_from_stream`](../struct.FileStore.html#method.write_file_from_stream).
-    fn write_file_from_stream(
-        &self,
-        path: StoragePath,
-        stream: WrappedStream<Result<Data, io::Error>>,
-    ) -> OperationCompleteFuture;
-}
-
-impl BackendImplementation {
-    pub(crate) fn get(&self) -> Box<&dyn StorageImpl> {
-        match self {
-            #[cfg(feature = "file")]
-            BackendImplementation::File(ref fs) => Box::new(fs),
-        }
-    }
+    fn write_file_from_stream(&self, path: StoragePath, stream: DataStream) -> WriteCompleteFuture;
 }

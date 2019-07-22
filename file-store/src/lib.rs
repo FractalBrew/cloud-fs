@@ -6,8 +6,8 @@
 //!
 //! Obviously offering the same API across all backends means the API is fairly
 //! basic, but if all you want to do is write, read or list files it should be
-//! plenty. Past that some of the backends provide access to internal functions
-//! via a `from_filestore` function.
+//! plenty. Past that some of the backends provide access to internal functions.
+//! You can get the backend via the `TryFrom` train.
 //!
 //! Which backend is available depends on the features cloud-fs is compiled
 //! with. See the [`backends`](backends/index.html) module.
@@ -16,6 +16,7 @@
 #![warn(missing_docs)]
 #![feature(async_await)]
 
+#[macro_use]
 pub mod backends;
 pub mod executor;
 mod filestore;
