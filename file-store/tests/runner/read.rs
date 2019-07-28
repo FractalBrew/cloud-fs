@@ -39,7 +39,6 @@ fn compare_file(
     Ok(())
 }
 
-#[allow(irrefutable_let_patterns)]
 pub async fn test_list_files(fs: &FileStore, _context: &TestContext) -> TestResult<()> {
     async fn test_list<'a>(
         fs: &'a FileStore,
@@ -119,7 +118,6 @@ pub async fn test_list_files(fs: &FileStore, _context: &TestContext) -> TestResu
     Ok(())
 }
 
-#[allow(irrefutable_let_patterns)]
 pub async fn test_get_file(fs: &FileStore, _context: &TestContext) -> TestResult<()> {
     async fn test_pass(
         fs: &FileStore,

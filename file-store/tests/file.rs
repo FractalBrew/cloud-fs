@@ -7,16 +7,16 @@ extern crate file_store;
 #[macro_use]
 mod runner;
 
-use std::io;
-
 use file_store::backends::{Backend, FileBackend};
 use file_store::FileStore;
-use runner::TestContext;
+use runner::{TestContext, TestResult};
 
-async fn build_fs(context: &TestContext) -> io::Result<(FileStore, ())> {
+async fn build_fs(context: &TestContext) -> TestResult<(FileStore, ())> {
     Ok((FileBackend::connect(&context.get_root()).await?, ()))
 }
 
-async fn cleanup(_: ()) {}
+async fn cleanup(_: ()) -> TestResult<()> {
+    Ok(())
+}
 
-build_tests!(Backend::File, false, build_fs, cleanup);
+build_tests!(Backend::File, build_fs, cleanup);

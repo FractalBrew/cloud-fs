@@ -1,6 +1,4 @@
 //! Accesses files on the local filesystem. Included with the feature "file".
-extern crate tokio_fs;
-
 use std::convert::TryFrom;
 use std::fs::Metadata;
 use std::io;
@@ -12,7 +10,7 @@ use bytes::BytesMut;
 use futures::compat::*;
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{once, Stream, StreamExt, TryStreamExt};
-use old_futures::prelude::{Stream as OldStream, Async};
+use old_futures::prelude::{Async, Stream as OldStream};
 use tokio_fs::{read_dir, remove_dir, remove_file, symlink_metadata, DirEntry, File};
 use tokio_io::io::write_all;
 use tokio_io::AsyncRead as TokioAsyncRead;
@@ -283,7 +281,6 @@ impl FileBackend {
     }
 }
 
-#[allow(irrefutable_let_patterns)]
 impl TryFrom<FileStore> for FileBackend {
     type Error = io::Error;
 

@@ -1,7 +1,4 @@
 //! The main types used in this crate.
-
-extern crate bytes;
-
 pub(crate) mod error;
 pub(crate) mod future;
 pub(crate) mod objects;

@@ -1,5 +1,3 @@
-extern crate tempfile;
-
 #[macro_use]
 mod utils;
 pub mod read;
@@ -195,7 +193,7 @@ pub fn prepare_test(backend: Backend) -> TestResult<TestContext> {
 }
 
 macro_rules! make_test {
-    ($backend:expr, $pkg:ident, $name:ident, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
+    ($backend:expr, $pkg:ident, $name:ident, $setup:expr, $cleanup:expr) => {
         #[test]
         fn $name() {
             let result: Result<crate::runner::TestResult<()>, std::sync::mpsc::TryRecvError> =
@@ -203,7 +201,7 @@ macro_rules! make_test {
                     let test_context = crate::runner::prepare_test($backend)?;
                     let (fs, backend_context) = $setup(&test_context).await?;
                     crate::runner::$pkg::$name(&fs, &test_context).await?;
-                    $cleanup(backend_context).await;
+                    $cleanup(backend_context).await?;
                     Ok(())
                 });
 
@@ -217,12 +215,11 @@ macro_rules! make_test {
 }
 
 macro_rules! build_tests {
-    ($backend:expr, $allow_incomplete:expr, $setup:expr, $cleanup:expr) => {
+    ($backend:expr, $setup:expr, $cleanup:expr) => {
         make_test!(
             $backend,
             read,
             test_list_files,
-            $allow_incomplete,
             $setup,
             $cleanup
         );
@@ -230,7 +227,6 @@ macro_rules! build_tests {
             $backend,
             read,
             test_get_file,
-            $allow_incomplete,
             $setup,
             $cleanup
         );
@@ -238,7 +234,6 @@ macro_rules! build_tests {
             $backend,
             read,
             test_get_file_stream,
-            $allow_incomplete,
             $setup,
             $cleanup
         );
@@ -246,7 +241,6 @@ macro_rules! build_tests {
             $backend,
             write,
             test_copy_file,
-            $allow_incomplete,
             $setup,
             $cleanup
         );
@@ -254,7 +248,6 @@ macro_rules! build_tests {
             $backend,
             write,
             test_move_file,
-            $allow_incomplete,
             $setup,
             $cleanup
         );
@@ -262,7 +255,6 @@ macro_rules! build_tests {
             $backend,
             write,
             test_delete_file,
-            $allow_incomplete,
             $setup,
             $cleanup
         );
@@ -270,7 +262,6 @@ macro_rules! build_tests {
             $backend,
             write,
             test_write_from_stream,
-            $allow_incomplete,
             $setup,
             $cleanup
         );

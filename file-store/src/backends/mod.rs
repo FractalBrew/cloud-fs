@@ -1,4 +1,6 @@
 //! Contains the different storage backend implementations.
+#[cfg(feature = "b2")]
+mod b2;
 #[cfg(feature = "file")]
 mod file;
 
@@ -6,6 +8,8 @@ use std::fmt;
 
 use futures::future::TryFutureExt;
 
+#[cfg(feature = "b2")]
+pub use b2::B2Backend;
 #[cfg(feature = "file")]
 pub use file::FileBackend;
 
@@ -17,6 +21,9 @@ pub enum Backend {
     #[cfg(feature = "file")]
     /// The [file backend](file/index.html). Included with the "file" feature.
     File,
+    #[cfg(feature = "file")]
+    /// The [b2 backend](b2/index.html). Included with the "b2" feature.
+    B2,
 }
 
 impl fmt::Display for Backend {
@@ -24,6 +31,8 @@ impl fmt::Display for Backend {
         match self {
             #[cfg(feature = "file")]
             Backend::File => f.write_str("file"),
+            #[cfg(feature = "b2")]
+            Backend::B2 => f.write_str("b2"),
         }
     }
 }
@@ -33,12 +42,16 @@ macro_rules! call_backend {
         match $backend {
             #[cfg(feature = "file")]
             BackendImplementation::File(b) => b.$method(),
+            #[cfg(feature = "b2")]
+            BackendImplementation::B2(b) => b.$method(),
         }
     };
     ($backend:expr, $method:ident, $($arg:expr),*) => {
         match $backend {
             #[cfg(feature = "file")]
             BackendImplementation::File(b) => b.$method($($arg,)*),
+            #[cfg(feature = "b2")]
+            BackendImplementation::B2(b) => b.$method($($arg,)*),
         }
     };
 }
@@ -49,6 +62,9 @@ pub(crate) enum BackendImplementation {
     #[cfg(feature = "file")]
     /// The [file backend](struct.FileBackend.html).
     File(FileBackend),
+    #[cfg(feature = "b2")]
+    /// The [file backend](struct.FileBackend.html).
+    B2(B2Backend),
 }
 
 /// The trait that every storage backend must implement at a minimum.
