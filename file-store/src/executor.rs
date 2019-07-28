@@ -4,9 +4,6 @@
 //! some parts have dependencies on tokio's executor. Hopefully that will change
 //! in the future though so for now this exposes an executor guaranteed to work
 //! and used in tests to verify that.
-
-extern crate tokio;
-
 use std::boxed::Box;
 use std::future::Future;
 use std::sync::mpsc;
@@ -14,6 +11,8 @@ use std::sync::mpsc;
 use futures::channel::oneshot;
 use futures::compat::Compat;
 use futures::future::FutureExt;
+use tokio::run as tokio_run;
+use tokio_executor::spawn as tokio_spawn;
 
 /// Spawns a future on the existing runtime returning its result.
 pub fn spawn<F>(future: F) -> impl Future<Output = Result<F::Output, oneshot::Canceled>>
@@ -28,7 +27,7 @@ where
         Err(_) => Err(()),
     }));
 
-    tokio::executor::spawn(compat);
+    tokio_spawn(compat);
 
     receiver
 }
@@ -48,7 +47,7 @@ where
         Err(_) => Err(()),
     }));
 
-    tokio::run(compat);
+    tokio_run(compat);
 
     receiver.try_recv()
 }

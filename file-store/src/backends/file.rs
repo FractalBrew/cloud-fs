@@ -12,10 +12,10 @@ use bytes::BytesMut;
 use futures::compat::*;
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{once, Stream, StreamExt, TryStreamExt};
-use tokio::io::{write_all, AsyncRead as TokioAsyncRead};
-use tokio::prelude::stream::Stream as TokioStream;
-use tokio::prelude::Async as TokioAsync;
+use old_futures::prelude::{Stream as OldStream, Async};
 use tokio_fs::{read_dir, remove_dir, remove_file, symlink_metadata, DirEntry, File};
+use tokio_io::io::write_all;
+use tokio_io::AsyncRead as TokioAsyncRead;
 
 use super::{Backend, BackendImplementation, StorageImpl};
 use crate::filestore::FileStore;
@@ -202,19 +202,19 @@ impl FileReadStream {
     }
 }
 
-impl TokioStream for FileReadStream {
+impl OldStream for FileReadStream {
     type Item = Data;
     type Error = io::Error;
 
-    fn poll(&mut self) -> io::Result<TokioAsync<Option<Data>>> {
+    fn poll(&mut self) -> io::Result<Async<Option<Data>>> {
         let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
         match self.file.read_buf(&mut buffer) {
-            Ok(TokioAsync::Ready(0)) => Ok(TokioAsync::Ready(None)),
-            Ok(TokioAsync::Ready(size)) => {
+            Ok(Async::Ready(0)) => Ok(Async::Ready(None)),
+            Ok(Async::Ready(size)) => {
                 buffer.split_off(size);
-                Ok(TokioAsync::Ready(Some(buffer.freeze())))
+                Ok(Async::Ready(Some(buffer.freeze())))
             }
-            Ok(TokioAsync::NotReady) => Ok(TokioAsync::NotReady),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(e) => Err(get_fserror(e, self.path.clone())),
         }
     }
