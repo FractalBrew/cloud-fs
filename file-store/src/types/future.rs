@@ -4,8 +4,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::future::ready;
-
 pub(crate) type FuturePoll<R> = Poll<R>;
 
 pub(crate) type PinnedFuture<R> = Pin<Box<dyn Future<Output = R> + Send + 'static>>;
@@ -29,16 +27,6 @@ where
     {
         WrappedFuture {
             base: Box::pin(base),
-        }
-    }
-
-    pub(crate) fn from_result<I, E>(result: Result<I, E>) -> WrappedFuture<Result<I, E>>
-    where
-        I: Send,
-        E: Send,
-    {
-        WrappedFuture {
-            base: Box::pin(ready(result)),
         }
     }
 }

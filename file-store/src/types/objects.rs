@@ -63,13 +63,13 @@ impl fmt::Display for ObjectType {
 #[derive(Clone, PartialEq, Debug)]
 pub struct Object {
     pub(crate) object_type: ObjectType,
-    pub(crate) path: StoragePath,
+    pub(crate) path: ObjectPath,
     pub(crate) size: u64,
 }
 
 impl Object {
     /// Gets the object's path.
-    pub fn path(&self) -> StoragePath {
+    pub fn path(&self) -> ObjectPath {
         self.path.clone()
     }
 

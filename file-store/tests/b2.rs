@@ -9,6 +9,7 @@ mod runner;
 mod mocks;
 
 use futures::channel::oneshot::Sender;
+use futures::future::pending;
 
 use file_store::backends::B2Backend;
 use file_store::backends::Backend;
@@ -22,7 +23,8 @@ async fn build_fs(context: &TestContext) -> TestResult<(FileStore, Sender<()>)> 
     let (_addr, server, sender) = build_server(context.get_root())?;
 
     let _ = spawn(server);
-    Ok((B2Backend::connect().await?, sender))
+    pending::<()>().await;
+    Ok((B2Backend::connect("foo", "bar").await?, sender))
 }
 
 async fn cleanup(sender: Sender<()>) -> TestResult<()> {

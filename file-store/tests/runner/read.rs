@@ -1,4 +1,3 @@
-use std::convert::TryInto;
 use std::iter::empty;
 
 use futures::stream::{StreamExt, TryStreamExt};
@@ -10,7 +9,7 @@ use file_store::*;
 
 fn compare_file(
     file: &Object,
-    mut expected_path: StoragePath,
+    mut expected_path: ObjectPath,
     expected_type: ObjectType,
     expected_size: u64,
 ) -> TestResult<()> {
@@ -26,7 +25,7 @@ fn compare_file(
         "Should have the expected path."
     );
     test_assert_eq!(
-        file.file_type(),
+        file.object_type(),
         expected_type,
         "Should have the expected type."
     );
@@ -46,7 +45,7 @@ pub async fn test_list_files(fs: &FileStore, _context: &TestContext) -> TestResu
         mut files: Vec<(&'static str, ObjectType, u64)>,
     ) -> TestResult<()> {
         let mut results = fs
-            .list_objects(StoragePath::new(path)?)
+            .list_objects(ObjectPath::new(path)?)
             .await?
             .try_collect::<Vec<Object>>()
             .await?;
@@ -62,7 +61,7 @@ pub async fn test_list_files(fs: &FileStore, _context: &TestContext) -> TestResu
         for _ in 0..files.len() {
             let result = results.remove(0);
             let (pathstr, file_type, size) = files.remove(0);
-            compare_file(&result, StoragePath::new(pathstr)?, file_type, size)?;
+            compare_file(&result, ObjectPath::new(pathstr)?, file_type, size)?;
         }
 
         Ok(())
@@ -125,7 +124,7 @@ pub async fn test_get_file(fs: &FileStore, _context: &TestContext) -> TestResult
         expected_type: ObjectType,
         size: u64,
     ) -> TestResult<()> {
-        let expected_path = StoragePath::new(path)?;
+        let expected_path = ObjectPath::new(path)?;
         let file = fs.get_object(expected_path.clone()).await?;
         compare_file(&file, expected_path, expected_type, size)?;
 
@@ -133,13 +132,13 @@ pub async fn test_get_file(fs: &FileStore, _context: &TestContext) -> TestResult
     }
 
     async fn test_fail(fs: &FileStore, path: &str) -> TestResult<()> {
-        let fspath = StoragePath::new(path)?;
+        let fspath = ObjectPath::new(path)?;
         let result = fs.get_object(fspath.clone()).await;
         test_assert!(result.is_err(), "Should have failed to find {}.", fspath);
         if let Err(e) = result {
             test_assert_eq!(
-                e.try_into(),
-                Ok(StorageErrorKind::NotFound(fspath)),
+                e.kind(),
+                StorageErrorKind::NotFound(fspath),
                 "Should have returned a NotFound error."
             );
         }
@@ -175,7 +174,7 @@ pub async fn test_get_file_stream(fs: &FileStore, context: &TestContext) -> Test
     where
         I: Iterator<Item = u8>,
     {
-        let target = StoragePath::new(path)?;
+        let target = ObjectPath::new(path)?;
         let mut stream = Box::pin(fs.get_file_stream(target).await?);
 
         let mut pos: usize = 0;
@@ -215,11 +214,11 @@ pub async fn test_get_file_stream(fs: &FileStore, context: &TestContext) -> Test
     }
 
     async fn test_fail(fs: &FileStore, _context: &TestContext, path: &str) -> TestResult<()> {
-        let target = StoragePath::new(path)?;
+        let target = ObjectPath::new(path)?;
         let result = fs.get_file_stream(target.clone()).await;
         test_assert!(result.is_err());
         if let Err(e) = result {
-            test_assert_eq!(e.try_into(), Ok(StorageErrorKind::NotFound(target)));
+            test_assert_eq!(e.kind(), StorageErrorKind::NotFound(target));
         }
 
         Ok(())

@@ -5,7 +5,6 @@ pub mod write;
 
 use std::fmt;
 use std::fs::create_dir_all;
-use std::io;
 use std::iter::empty;
 use std::path::PathBuf;
 
@@ -20,7 +19,7 @@ pub type TestResult<I> = Result<I, TestError>;
 
 #[derive(Debug)]
 pub enum TestError {
-    UnexpectedIOError(io::Error),
+    UnexpectedStorageError(StorageError),
     UnexpectedPathError(ObjectPathError),
     UnexpectedTransferError(TransferError),
     HarnessFailure(String),
@@ -39,8 +38,8 @@ impl TestError {
 impl fmt::Display for TestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TestError::UnexpectedIOError(error) => {
-                f.write_fmt(format_args!("Unexpected IO error thrown: {}", error))
+            TestError::UnexpectedStorageError(error) => {
+                f.write_fmt(format_args!("Unexpected storage error thrown: {}", error))
             }
             TestError::UnexpectedPathError(error) => {
                 f.write_fmt(format_args!("Unexpected path error thrown: {}", error))
@@ -59,9 +58,9 @@ impl fmt::Display for TestError {
     }
 }
 
-impl From<io::Error> for TestError {
-    fn from(error: io::Error) -> TestError {
-        TestError::UnexpectedIOError(error)
+impl From<StorageError> for TestError {
+    fn from(error: StorageError) -> TestError {
+        TestError::UnexpectedStorageError(error)
     }
 }
 
@@ -96,10 +95,10 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    pub fn get_target(&self, path: &StoragePath) -> PathBuf {
+    pub fn get_target(&self, path: &ObjectPath) -> PathBuf {
         let mut target = self.get_root();
         target.push(
-            StoragePath::new("/")
+            ObjectPath::new("/")
                 .unwrap()
                 .relative(path)
                 .unwrap()
@@ -216,54 +215,12 @@ macro_rules! make_test {
 
 macro_rules! build_tests {
     ($backend:expr, $setup:expr, $cleanup:expr) => {
-        make_test!(
-            $backend,
-            read,
-            test_list_files,
-            $setup,
-            $cleanup
-        );
-        make_test!(
-            $backend,
-            read,
-            test_get_file,
-            $setup,
-            $cleanup
-        );
-        make_test!(
-            $backend,
-            read,
-            test_get_file_stream,
-            $setup,
-            $cleanup
-        );
-        make_test!(
-            $backend,
-            write,
-            test_copy_file,
-            $setup,
-            $cleanup
-        );
-        make_test!(
-            $backend,
-            write,
-            test_move_file,
-            $setup,
-            $cleanup
-        );
-        make_test!(
-            $backend,
-            write,
-            test_delete_file,
-            $setup,
-            $cleanup
-        );
-        make_test!(
-            $backend,
-            write,
-            test_write_from_stream,
-            $setup,
-            $cleanup
-        );
+        make_test!($backend, read, test_list_files, $setup, $cleanup);
+        make_test!($backend, read, test_get_file, $setup, $cleanup);
+        make_test!($backend, read, test_get_file_stream, $setup, $cleanup);
+        make_test!($backend, write, test_copy_file, $setup, $cleanup);
+        make_test!($backend, write, test_move_file, $setup, $cleanup);
+        make_test!($backend, write, test_delete_file, $setup, $cleanup);
+        make_test!($backend, write, test_write_from_stream, $setup, $cleanup);
     };
 }

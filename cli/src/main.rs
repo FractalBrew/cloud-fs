@@ -1,5 +1,4 @@
 #![feature(async_await)]
-use std::io;
 use std::path::Path;
 
 use clap::{App, Arg, SubCommand};
@@ -8,9 +7,9 @@ use futures::stream::TryStreamExt;
 
 use file_store::backends::FileBackend;
 use file_store::executor::run;
-use file_store::{FileStore, StoragePath};
+use file_store::{FileStore, ObjectPath, StorageResult};
 
-async fn ls(filestore: FileStore, path: StoragePath) -> io::Result<()> {
+async fn ls(filestore: FileStore, path: ObjectPath) -> StorageResult<()> {
     let stream = filestore.list_objects(path).await?;
     stream
         .try_for_each(|object| {
@@ -77,7 +76,7 @@ fn main() {
     let future = match matches.subcommand() {
         ("ls", Some(params)) => {
             let path = match params.value_of("path") {
-                Some(p) => match StoragePath::new(p) {
+                Some(p) => match ObjectPath::new(p) {
                     Ok(pth) => pth,
                     Err(e) => {
                         println!("{}\n\n{}", e, matches.usage());

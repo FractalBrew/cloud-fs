@@ -1,4 +1,3 @@
-use std::convert::TryInto;
 use std::fs::{metadata, File};
 use std::io::{BufReader, ErrorKind, Read};
 
@@ -16,9 +15,9 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote_current = StoragePath::new(path)?;
+        let remote_current = ObjectPath::new(path)?;
         let local_current = context.get_target(&remote_current);
-        let remote_target = StoragePath::new(target)?;
+        let remote_target = ObjectPath::new(target)?;
         let local_target = context.get_target(&remote_target);
 
         fs.copy_file(remote_current.clone(), remote_target.clone())
@@ -73,8 +72,8 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         path: &str,
         target: &str,
     ) -> TestResult<()> {
-        let remote_current = StoragePath::new(path)?;
-        let remote_target = StoragePath::new(target)?;
+        let remote_current = ObjectPath::new(path)?;
+        let remote_target = ObjectPath::new(target)?;
         let local_target = context.get_target(&remote_target);
 
         let result = fs
@@ -84,8 +83,8 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         if let Err(e) = result {
             if let TransferError::SourceError(s) = e {
                 test_assert_eq!(
-                    s.try_into(),
-                    Ok(StorageErrorKind::NotFound(remote_current.clone())),
+                    s.kind(),
+                    StorageErrorKind::NotFound(remote_current.clone()),
                     "Should have been unable to find {}.",
                     remote_current
                 );
@@ -128,9 +127,9 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote_current = StoragePath::new(path)?;
+        let remote_current = ObjectPath::new(path)?;
         let local_current = context.get_target(&remote_current);
-        let remote_target = StoragePath::new(target)?;
+        let remote_target = ObjectPath::new(target)?;
         let local_target = context.get_target(&remote_target);
 
         fs.move_file(remote_current.clone(), remote_target.clone())
@@ -180,8 +179,8 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         path: &str,
         target: &str,
     ) -> TestResult<()> {
-        let remote_current = StoragePath::new(path)?;
-        let remote_target = StoragePath::new(target)?;
+        let remote_current = ObjectPath::new(path)?;
+        let remote_target = ObjectPath::new(target)?;
         let local_target = context.get_target(&remote_target);
 
         let result = fs
@@ -191,8 +190,8 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         if let Err(e) = result {
             if let TransferError::SourceError(s) = e {
                 test_assert_eq!(
-                    s.try_into(),
-                    Ok(StorageErrorKind::NotFound(remote_current.clone())),
+                    s.kind(),
+                    StorageErrorKind::NotFound(remote_current.clone()),
                     "Should have been unable to find {}.",
                     remote_current
                 );
@@ -228,7 +227,7 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
 
 pub async fn test_delete_file(fs: &FileStore, context: &TestContext) -> TestResult<()> {
     async fn test_pass(fs: &FileStore, context: &TestContext, path: &str) -> TestResult<()> {
-        let remote = StoragePath::new(path)?;
+        let remote = ObjectPath::new(path)?;
         let target = context.get_target(&remote);
 
         fs.delete_object(remote).await?;
@@ -251,14 +250,14 @@ pub async fn test_delete_file(fs: &FileStore, context: &TestContext) -> TestResu
     }
 
     async fn test_fail(fs: &FileStore, context: &TestContext, path: &str) -> TestResult<()> {
-        let fspath = StoragePath::new(path)?;
+        let fspath = ObjectPath::new(path)?;
         let target = context.get_target(&fspath);
 
         match fs.delete_object(fspath.clone()).await {
             Ok(()) => test_fail!("Should have failed to delete {}", fspath),
             Err(e) => test_assert_eq!(
-                e.try_into(),
-                Ok(StorageErrorKind::NotFound(fspath.clone())),
+                e.kind(),
+                StorageErrorKind::NotFound(fspath.clone()),
                 "The file {} should have not been found.",
                 fspath
             ),
@@ -290,7 +289,7 @@ pub async fn test_write_from_stream(fs: &FileStore, context: &TestContext) -> Te
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote = StoragePath::new(path)?;
+        let remote = ObjectPath::new(path)?;
         let target = context.get_target(&remote);
 
         fs.write_file_from_stream(
