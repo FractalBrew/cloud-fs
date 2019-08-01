@@ -30,9 +30,9 @@ impl fmt::Display for Backend {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             #[cfg(feature = "file")]
-            Backend::File => f.write_str("file"),
+            Backend::File => f.pad("file"),
             #[cfg(feature = "b2")]
-            Backend::B2 => f.write_str("b2"),
+            Backend::B2 => f.pad("b2"),
         }
     }
 }

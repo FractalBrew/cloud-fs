@@ -100,13 +100,13 @@ impl fmt::Display for Prefix {
         match self {
             // Good comparisons for all the UNC cases.
             Prefix::VerbatimUNC(ref server, ref share) => {
-                f.write_fmt(format_args!("\\\\?\\UNC\\{}\\{}", server, share))
+                f.pad(&format!("\\\\?\\UNC\\{}\\{}", server, share))
             }
-            Prefix::VerbatimDisk(c) => f.write_fmt(format_args!("\\\\?\\{}:", char::from(*c))),
+            Prefix::VerbatimDisk(c) => f.pad(&format!("\\\\?\\{}:", char::from(*c))),
             Prefix::UNC(ref server, ref share) => {
-                f.write_fmt(format_args!("\\\\{}\\{}", server, share))
+                f.pad(&format!("\\\\{}\\{}", server, share))
             }
-            Prefix::Disk(c) => f.write_fmt(format_args!("{}:", char::from(*c))),
+            Prefix::Disk(c) => f.pad(&format!("{}:", char::from(*c))),
         }
     }
 }
@@ -464,24 +464,26 @@ impl fmt::Display for StoragePath {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let separator = if self.prefix.is_some() { "\\" } else { "/" };
 
+        let mut path = String::new();
+
         if let Some(p) = &self.prefix {
-            p.fmt(f)?
+            path.push_str(&format!("{}", p));
         }
 
         if self.is_absolute {
-            f.write_str(separator)?;
+            path.push_str(separator);
         }
 
-        f.write_str(&self.directories.join(separator))?;
+        path.push_str(&self.directories.join(separator));
         if !self.directories.is_empty() {
-            f.write_str(separator)?;
+            path.push_str(separator);
         }
 
         if let Some(ref filename) = self.filename {
-            f.write_str(filename.as_str())?;
+            path.push_str(filename.as_str());
         }
 
-        Ok(())
+        f.pad(&path)
     }
 }
 

@@ -38,7 +38,7 @@ impl error::Error for StorageError {}
 
 macro_rules! write {
     ($f:expr, $($info:tt)*) => {
-        $f.write_fmt(format_args!($($info)*))
+        $f.pad(&format!($($info)*))
     };
 }
 
@@ -96,7 +96,7 @@ impl error::Error for ObjectPathError {}
 
 impl fmt::Display for ObjectPathError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_fmt(format_args!(
+        f.pad(&format!(
             "Failed to parse '{}'. {}",
             &self.spec, &self.message
         ))

@@ -46,7 +46,7 @@ where
 }
 
 fn get_fsfile(mut path: StoragePath, metadata: &Metadata) -> Object {
-    let (file_type, size) = if metadata.is_file() {
+    let (object_type, size) = if metadata.is_file() {
         (ObjectType::File, metadata.len())
     } else if metadata.is_dir() {
         (ObjectType::Directory, 0)
@@ -59,7 +59,7 @@ fn get_fsfile(mut path: StoragePath, metadata: &Metadata) -> Object {
     }
 
     Object {
-        file_type,
+        object_type,
         path,
         size,
     }
@@ -225,10 +225,10 @@ async fn delete_directory(space: FileSpace, path: StoragePath) -> io::Result<()>
         .await?;
     let files = allfiles
         .iter()
-        .filter(|file| file.file_type() != ObjectType::Directory);
+        .filter(|file| file.object_type() != ObjectType::Directory);
     let directories = allfiles
         .iter()
-        .filter(|file| file.file_type() == ObjectType::Directory);
+        .filter(|file| file.object_type() == ObjectType::Directory);
 
     for file in files {
         let target = space.get_std_path(&file.path())?;

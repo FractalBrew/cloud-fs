@@ -1,6 +1,7 @@
 //! Object types.
 
 use std::cmp::Ordering;
+use std::fmt;
 
 use super::*;
 
@@ -44,6 +45,16 @@ impl Ord for ObjectType {
     }
 }
 
+impl fmt::Display for ObjectType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ObjectType::File => f.pad("file"),
+            ObjectType::Directory => f.pad("dir"),
+            ObjectType::Unknown => f.pad("unknown"),
+        }
+    }
+}
+
 /// An object of some kind that exists at a poth in the storage system.
 ///
 /// Most backends only support File objects, and this crate only really supports
@@ -51,7 +62,7 @@ impl Ord for ObjectType {
 /// file type that physically exists at a path.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Object {
-    pub(crate) file_type: ObjectType,
+    pub(crate) object_type: ObjectType,
     pub(crate) path: StoragePath,
     pub(crate) size: u64,
 }
@@ -68,8 +79,8 @@ impl Object {
     }
 
     /// Gets the object's type.
-    pub fn file_type(&self) -> ObjectType {
-        self.file_type
+    pub fn object_type(&self) -> ObjectType {
+        self.object_type
     }
 }
 
