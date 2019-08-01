@@ -45,7 +45,7 @@ where
     stream.map_err(move |e| get_storage_error(e, path.clone()))
 }
 
-fn get_object(mut path: ObjectPath, metadata: &Metadata) -> Object {
+fn get_object(path: ObjectPath, metadata: &Metadata) -> Object {
     let (object_type, size) = if metadata.is_file() {
         (ObjectType::File, metadata.len())
     } else if metadata.is_dir() {
@@ -53,10 +53,6 @@ fn get_object(mut path: ObjectPath, metadata: &Metadata) -> Object {
     } else {
         (ObjectType::Unknown, 0)
     };
-
-    if metadata.is_dir() {
-        path.make_dir();
-    }
 
     Object {
         object_type,
@@ -67,23 +63,17 @@ fn get_object(mut path: ObjectPath, metadata: &Metadata) -> Object {
 
 #[derive(Clone, Debug)]
 struct FileSpace {
-    base: ObjectPath,
+    base: PathBuf,
 }
 
 impl FileSpace {
     fn get_std_path(&self, path: &ObjectPath) -> StorageResult<PathBuf> {
-        if !path.is_absolute() {
-            return Err(error::invalid_path::<StorageError>(
-                path.clone(),
-                "Target path is expected to be absolute.",
-                None,
-            ));
+        let mut result = self.base.clone();
+        for part in path.parts() {
+            result.push(part);
         }
 
-        let relative = ObjectPath::new("/")?.relative(path)?;
-        let target = self.base.join(&relative)?;
-
-        Ok(target.as_std_path())
+        Ok(result)
     }
 }
 
@@ -133,11 +123,7 @@ fn directory_stream(
                                 }
                             };
 
-                            if metadata.is_dir() {
-                                path.push_dir(&filename);
-                            } else {
-                                path.set_filename(&filename);
-                            }
+                            path.push_part(&filename);
                             Ok((path, metadata))
                         }
                         Err(e) => Err(e),
@@ -268,10 +254,11 @@ impl FileBackend {
     pub fn connect(root: &Path) -> ConnectFuture {
         let target = root.to_owned();
         ConnectFuture::from_future(async move {
-            let path = ObjectPath::from_std_path(&target)?;
-
-            let metadata =
-                wrap_future(symlink_metadata(target.clone()).compat(), path.clone()).await?;
+            let metadata = wrap_future(
+                symlink_metadata(target.clone()).compat(),
+                ObjectPath::new("")?,
+            )
+            .await?;
             if !metadata.is_dir() {
                 Err(error::invalid_settings::<StorageError>(
                     "Root path is not a directory.",
@@ -280,7 +267,7 @@ impl FileBackend {
             } else {
                 Ok(FileStore {
                     backend: BackendImplementation::File(FileBackend {
-                        space: FileSpace { base: path },
+                        space: FileSpace { base: target },
                     }),
                 })
             }
@@ -348,7 +335,7 @@ impl StorageImpl for FileBackend {
     }
 
     fn delete_object(&self, path: ObjectPath) -> OperationCompleteFuture {
-        async fn delete(space: FileSpace, mut path: ObjectPath) -> StorageResult<()> {
+        async fn delete(space: FileSpace, path: ObjectPath) -> StorageResult<()> {
             let target = space.get_std_path(&path)?;
             let metadata =
                 wrap_future(symlink_metadata(target.clone()).compat(), path.clone()).await?;
@@ -356,7 +343,6 @@ impl StorageImpl for FileBackend {
             if !metadata.is_dir() {
                 wrap_future(remove_file(target.clone()).compat(), path.clone()).await
             } else {
-                path.make_dir();
                 delete_directory(space, path).await
             }
         }
@@ -367,7 +353,7 @@ impl StorageImpl for FileBackend {
     fn write_file_from_stream(&self, path: ObjectPath, stream: DataStream) -> WriteCompleteFuture {
         async fn write(
             space: FileSpace,
-            mut path: ObjectPath,
+            path: ObjectPath,
             mut stream: DataStream,
         ) -> Result<(), TransferError> {
             let target = space
@@ -376,7 +362,6 @@ impl StorageImpl for FileBackend {
             match symlink_metadata(target.clone()).compat().await {
                 Ok(m) => {
                     if m.is_dir() {
-                        path.make_dir();
                         delete_directory(space, path.clone())
                             .await
                             .map_err(TransferError::TargetError)?;

@@ -156,17 +156,6 @@ pub fn parse_error(spec: &str, message: &str) -> ObjectPathError {
     }
 }
 
-pub fn invalid_path<E>(path: ObjectPath, detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::InvalidPath(path),
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
-}
-
 pub fn not_found<E>(path: ObjectPath, error: Option<E>) -> StorageError
 where
     E: 'static + error::Error + Send + Sync,

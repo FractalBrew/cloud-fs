@@ -108,12 +108,12 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         Ok(())
     }
 
-    test_pass(fs, context, "/mediumfile", "/testfile", 58, 5 * MB).await?;
-    test_pass(fs, context, "/largefile", "/dir2/hop", 0, 100 * MB).await?;
-    test_pass(fs, context, "/dir2/daz", "/bazza", 72, 300).await?;
+    test_pass(fs, context, "mediumfile", "testfile", 58, 5 * MB).await?;
+    test_pass(fs, context, "largefile", "dir2/hop", 0, 100 * MB).await?;
+    test_pass(fs, context, "dir2/daz", "bazza", 72, 300).await?;
 
-    test_fail(fs, context, "/dir2/gaz", "/bazza").await?;
-    test_fail(fs, context, "/fooish", "/dir2/too").await?;
+    test_fail(fs, context, "dir2/gaz", "bazza").await?;
+    test_fail(fs, context, "fooish", "dir2/too").await?;
 
     Ok(())
 }
@@ -215,12 +215,12 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         Ok(())
     }
 
-    test_pass(fs, context, "/mediumfile", "/testfile", 58, 5 * MB).await?;
-    test_pass(fs, context, "/largefile", "/dir2/hop", 0, 100 * MB).await?;
-    test_pass(fs, context, "/dir2/daz", "/bazza", 72, 300).await?;
+    test_pass(fs, context, "mediumfile", "testfile", 58, 5 * MB).await?;
+    test_pass(fs, context, "largefile", "dir2/hop", 0, 100 * MB).await?;
+    test_pass(fs, context, "dir2/daz", "bazza", 72, 300).await?;
 
-    test_fail(fs, context, "/dir2/gaz", "/bazza").await?;
-    test_fail(fs, context, "/fooish", "/dir2/too").await?;
+    test_fail(fs, context, "dir2/gaz", "bazza").await?;
+    test_fail(fs, context, "fooish", "dir2/too").await?;
 
     Ok(())
 }
@@ -270,13 +270,13 @@ pub async fn test_delete_file(fs: &FileStore, context: &TestContext) -> TestResu
         Ok(())
     }
 
-    test_pass(fs, context, "/largefile").await?;
-    test_pass(fs, context, "/smallfile.txt").await?;
-    test_pass(fs, context, "/dir2/daz").await?;
-    test_pass(fs, context, "/maybedir").await?;
-    test_pass(fs, context, "/dir2").await?;
+    test_pass(fs, context, "largefile").await?;
+    test_pass(fs, context, "smallfile.txt").await?;
+    test_pass(fs, context, "dir2/daz").await?;
+    test_pass(fs, context, "maybedir").await?;
+    test_pass(fs, context, "dir2").await?;
 
-    test_fail(fs, context, "/biz").await?;
+    test_fail(fs, context, "biz").await?;
 
     Ok(())
 }
@@ -342,9 +342,9 @@ pub async fn test_write_from_stream(fs: &FileStore, context: &TestContext) -> Te
         Ok(())
     }
 
-    test_write(fs, context, "/foobar", 58, 300).await?;
-    test_write(fs, context, "/maybedir", 27, 500).await?;
-    test_write(fs, context, "/dir2/daz", 27, 100 * MB).await?;
+    test_write(fs, context, "foobar", 58, 300).await?;
+    test_write(fs, context, "maybedir", 27, 500).await?;
+    test_write(fs, context, "dir2/daz", 27, 100 * MB).await?;
 
     Ok(())
 }

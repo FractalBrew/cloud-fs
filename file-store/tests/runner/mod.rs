@@ -97,13 +97,9 @@ pub struct TestContext {
 impl TestContext {
     pub fn get_target(&self, path: &ObjectPath) -> PathBuf {
         let mut target = self.get_root();
-        target.push(
-            ObjectPath::new("/")
-                .unwrap()
-                .relative(path)
-                .unwrap()
-                .as_std_path(),
-        );
+        for part in path.parts() {
+            target.push(part);
+        }
         target
     }
 

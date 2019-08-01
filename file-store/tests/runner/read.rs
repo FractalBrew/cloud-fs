@@ -9,16 +9,10 @@ use file_store::*;
 
 fn compare_file(
     file: &Object,
-    mut expected_path: ObjectPath,
+    expected_path: ObjectPath,
     expected_type: ObjectType,
     expected_size: u64,
 ) -> TestResult<()> {
-    if expected_type == ObjectType::Directory && !expected_path.is_directory() {
-        if let Some(name) = expected_path.filename() {
-            expected_path.push_dir(&name);
-        }
-    }
-
     test_assert_eq!(
         file.path(),
         expected_path.clone(),
@@ -68,48 +62,48 @@ pub async fn test_list_files(fs: &FileStore, _context: &TestContext) -> TestResu
     }
 
     let mut allfiles = vec![
-        ("/largefile", ObjectType::File, 100 * MB),
-        ("/mediumfile", ObjectType::File, 5 * MB),
-        ("/smallfile.txt", ObjectType::File, 27),
-        ("/dir2/0foo", ObjectType::File, 0),
-        ("/dir2/1bar", ObjectType::File, 0),
-        ("/dir2/5diz", ObjectType::File, 0),
-        ("/dir2/bar", ObjectType::File, 0),
-        ("/dir2/daz", ObjectType::File, 300),
-        ("/dir2/foo", ObjectType::File, 0),
-        ("/dir2/hop", ObjectType::File, 0),
-        ("/dir2/yu", ObjectType::File, 0),
+        ("largefile", ObjectType::File, 100 * MB),
+        ("mediumfile", ObjectType::File, 5 * MB),
+        ("smallfile.txt", ObjectType::File, 27),
+        ("dir2/0foo", ObjectType::File, 0),
+        ("dir2/1bar", ObjectType::File, 0),
+        ("dir2/5diz", ObjectType::File, 0),
+        ("dir2/bar", ObjectType::File, 0),
+        ("dir2/daz", ObjectType::File, 300),
+        ("dir2/foo", ObjectType::File, 0),
+        ("dir2/hop", ObjectType::File, 0),
+        ("dir2/yu", ObjectType::File, 0),
     ];
 
     if fs.backend_type() == Backend::File {
         allfiles.extend(vec![
-            ("/dir2/", ObjectType::Directory, 0),
-            ("/maybedir/", ObjectType::Directory, 0),
-            ("/maybedir/foo", ObjectType::File, 0),
-            ("/maybedir/bar", ObjectType::File, 0),
-            ("/maybedir/baz", ObjectType::File, 0),
-            ("/maybedir/foobar/", ObjectType::Directory, 0),
-            ("/maybedir/foobar/foo", ObjectType::File, 0),
-            ("/maybedir/foobar/bar", ObjectType::File, 0),
+            ("dir2", ObjectType::Directory, 0),
+            ("maybedir", ObjectType::Directory, 0),
+            ("maybedir/foo", ObjectType::File, 0),
+            ("maybedir/bar", ObjectType::File, 0),
+            ("maybedir/baz", ObjectType::File, 0),
+            ("maybedir/foobar", ObjectType::Directory, 0),
+            ("maybedir/foobar/foo", ObjectType::File, 0),
+            ("maybedir/foobar/bar", ObjectType::File, 0),
         ])
     } else {
         allfiles.extend(vec![("/maybedir", ObjectType::File, 0)])
     }
 
-    test_list(fs, "/", allfiles).await?;
+    test_list(fs, "", allfiles).await?;
 
     test_list(
         fs,
-        "/dir2/",
+        "dir2",
         vec![
-            ("/dir2/0foo", ObjectType::File, 0),
-            ("/dir2/1bar", ObjectType::File, 0),
-            ("/dir2/5diz", ObjectType::File, 0),
-            ("/dir2/bar", ObjectType::File, 0),
-            ("/dir2/daz", ObjectType::File, 300),
-            ("/dir2/foo", ObjectType::File, 0),
-            ("/dir2/hop", ObjectType::File, 0),
-            ("/dir2/yu", ObjectType::File, 0),
+            ("dir2/0foo", ObjectType::File, 0),
+            ("dir2/1bar", ObjectType::File, 0),
+            ("dir2/5diz", ObjectType::File, 0),
+            ("dir2/bar", ObjectType::File, 0),
+            ("dir2/daz", ObjectType::File, 300),
+            ("dir2/foo", ObjectType::File, 0),
+            ("dir2/hop", ObjectType::File, 0),
+            ("dir2/yu", ObjectType::File, 0),
         ],
     )
     .await?;
@@ -146,19 +140,19 @@ pub async fn test_get_file(fs: &FileStore, _context: &TestContext) -> TestResult
         Ok(())
     }
 
-    test_pass(fs, "/largefile", ObjectType::File, 100 * MB).await?;
-    test_pass(fs, "/smallfile.txt", ObjectType::File, 27).await?;
-    test_pass(fs, "/dir2/0foo", ObjectType::File, 0).await?;
-    test_pass(fs, "/dir2/daz", ObjectType::File, 300).await?;
+    test_pass(fs, "largefile", ObjectType::File, 100 * MB).await?;
+    test_pass(fs, "smallfile.txt", ObjectType::File, 27).await?;
+    test_pass(fs, "dir2/0foo", ObjectType::File, 0).await?;
+    test_pass(fs, "dir2/daz", ObjectType::File, 300).await?;
 
-    test_fail(fs, "/daz").await?;
-    test_fail(fs, "/foo/bar").await?;
+    test_fail(fs, "daz").await?;
+    test_fail(fs, "foo/bar").await?;
 
     if fs.backend_type() == Backend::File {
-        test_pass(fs, "/maybedir", ObjectType::Directory, 0).await?;
+        test_pass(fs, "maybedir", ObjectType::Directory, 0).await?;
     } else {
-        test_fail(fs, "/dir2").await?;
-        test_fail(fs, "/maybedir").await?;
+        test_fail(fs, "dir2").await?;
+        test_fail(fs, "maybedir").await?;
     }
 
     Ok(())
@@ -227,17 +221,17 @@ pub async fn test_get_file_stream(fs: &FileStore, context: &TestContext) -> Test
     test_pass(
         fs,
         context,
-        "/smallfile.txt",
+        "smallfile.txt",
         b"This is quite a short file.".iter().cloned(),
     )
     .await?;
-    test_pass(fs, context, "/largefile", ContentIterator::new(0, 100 * MB)).await?;
-    test_pass(fs, context, "/dir2/bar", empty()).await?;
-    test_pass(fs, context, "/dir2/daz", ContentIterator::new(72, 300)).await?;
+    test_pass(fs, context, "largefile", ContentIterator::new(0, 100 * MB)).await?;
+    test_pass(fs, context, "dir2/bar", empty()).await?;
+    test_pass(fs, context, "dir2/daz", ContentIterator::new(72, 300)).await?;
 
-    test_fail(fs, context, "/dir2").await?;
-    test_fail(fs, context, "/daz").await?;
-    test_fail(fs, context, "/foo/bar").await?;
+    test_fail(fs, context, "dir2").await?;
+    test_fail(fs, context, "daz").await?;
+    test_fail(fs, context, "foo/bar").await?;
 
     Ok(())
 }
