@@ -15,10 +15,10 @@ async fn ls(filestore: FileStore, path: StoragePath) -> io::Result<()> {
     stream
         .try_for_each(|object| {
             println!(
-                "{:8}{:70}{}",
+                "{:8}{:5} {}",
                 object.object_type(),
-                object.path(),
-                object.size()
+                object.size(),
+                object.path()
             );
             ready(Ok(()))
         })
