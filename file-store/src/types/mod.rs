@@ -5,7 +5,12 @@ pub(crate) mod objects;
 pub(crate) mod path;
 pub(crate) mod stream;
 
-use bytes::Bytes;
+use std::io;
+
+use bytes::buf::Buf;
+use bytes::{Bytes, IntoBuf};
+use futures::executor::{block_on_stream, BlockingStream};
+use futures::stream::Stream;
 
 use super::filestore::FileStore;
 pub use error::{ObjectPathError, StorageError, StorageErrorKind, StorageResult, TransferError};
@@ -37,3 +42,47 @@ pub type DataStreamFuture = WrappedFuture<StorageResult<DataStream>>;
 pub type CopyCompleteFuture = WrappedFuture<Result<(), TransferError>>;
 /// A future that resolves when the move is complete.
 pub type MoveCompleteFuture = WrappedFuture<Result<(), TransferError>>;
+
+pub(crate) struct BlockingStreamReader<S>
+where
+    S: Unpin + Stream,
+{
+    stream: BlockingStream<S>,
+    reader: Option<Box<dyn io::Read>>,
+}
+
+impl<S> BlockingStreamReader<S>
+where
+    S: Unpin + Stream,
+{
+    pub fn from_stream(stream: S) -> BlockingStreamReader<S> {
+        BlockingStreamReader {
+            stream: block_on_stream(stream),
+            reader: None,
+        }
+    }
+}
+
+impl<S, O, E> io::Read for BlockingStreamReader<S>
+where
+    S: Unpin + Stream<Item = Result<O, E>>,
+    O: IntoBuf,
+    <O as IntoBuf>::Buf: 'static,
+    E: Into<StorageError>,
+{
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.reader {
+            Some(ref mut r) => r.read(buf),
+            None => match self.stream.next() {
+                Some(Ok(d)) => {
+                    let mut reader = d.into_buf().reader();
+                    let count = reader.read(buf)?;
+                    self.reader = Some(Box::new(reader));
+                    Ok(count)
+                }
+                Some(Err(e)) => Err(e.into().into()),
+                None => Ok(0),
+            },
+        }
+    }
+}

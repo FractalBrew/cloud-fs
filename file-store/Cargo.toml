@@ -7,7 +7,7 @@ edition = "2018"
 [features]
 default = ["file", "b2"]
 file = ["tokio-fs", "tokio-io"]
-b2 = ["hyper", "hyper-tls", "base64", "http"]
+b2 = ["hyper", "hyper-tls", "base64", "http", "serde", "serde_json", "storage-types"]
 
 [dependencies]
 futures-preview = { version = "=0.3.0-alpha.17", features = ["compat", "async-await", "nightly"] }
@@ -15,12 +15,15 @@ old-futures = { version = "^0.1.28", package = "futures" }
 bytes = "^0.4.12"
 tokio-executor = "^0.1.8"
 tokio = "^0.1.22"
+storage-types = { path = "../storage-types", optional = true }
 tokio-fs = { version = "^0.1.6", optional = true }
 tokio-io = { version = "^0.1.12", optional = true }
 hyper = { version = "^0.12.30", optional = true }
 hyper-tls = { version = "^0.3.2", optional = true }
 base64 = { version = "^0.10.1", optional = true }
-http = { version = "^0.1.17", optional = true }
+http = { version = "^0.1.18", optional = true }
+serde = { version = "^1.0.98", optional = true }
+serde_json = { version = "^1.0.40", optional = true }
 
 [dev-dependencies]
 tempfile = "^3.0.8"

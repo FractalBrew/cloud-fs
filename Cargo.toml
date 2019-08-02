@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "storage-types",
     "file-store",
     "cli",
 ]

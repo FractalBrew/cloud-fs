@@ -19,9 +19,13 @@ pub enum StorageErrorKind {
     ConnectionClosed,
     /// The service returned some invalid data.
     InvalidData,
+    /// The credentials supplied were denied access.
+    AccessDenied,
     /// An error returned if the configuration for a backend was invalid
     /// somehow.
     InvalidSettings,
+    /// An internal failure, please report a bug!
+    InternalError,
     /// Any other type of error (normally will have an inner error).
     Other,
 }
@@ -87,6 +91,10 @@ impl fmt::Display for StorageError {
                 write!(f, "The storage connection was closed: {}", &self.detail)
             }
             StorageErrorKind::Other => write!(f, "An unknown error ocurred: {}", &self.detail),
+            StorageErrorKind::InternalError => {
+                write!(f, "An internal error occurred: {}", &self.detail)
+            }
+            StorageErrorKind::AccessDenied => write!(f, "Access was denied: {}", &self.detail),
             StorageErrorKind::InvalidSettings => write!(
                 f,
                 "Some of the settings passed were invalid: {}",
@@ -106,7 +114,9 @@ impl From<StorageError> for io::Error {
             StorageErrorKind::Cancelled => io::ErrorKind::ConnectionAborted,
             StorageErrorKind::ConnectionFailed => io::ErrorKind::ConnectionRefused,
             StorageErrorKind::ConnectionClosed => io::ErrorKind::NotConnected,
+            StorageErrorKind::InternalError => io::ErrorKind::Other,
             StorageErrorKind::Other => io::ErrorKind::Other,
+            StorageErrorKind::AccessDenied => io::ErrorKind::PermissionDenied,
         };
 
         io::Error::new(kind, error)
@@ -167,6 +177,17 @@ where
     }
 }
 
+pub fn access_denied<E>(detail: &str, error: Option<E>) -> StorageError
+where
+    E: 'static + error::Error + Send + Sync,
+{
+    StorageError {
+        kind: StorageErrorKind::AccessDenied,
+        detail: detail.to_owned(),
+        inner: error.map(|e| Box::new(e) as _),
+    }
+}
+
 pub fn invalid_settings<E>(detail: &str, error: Option<E>) -> StorageError
 where
     E: 'static + error::Error + Send + Sync,
@@ -217,6 +238,17 @@ where
 {
     StorageError {
         kind: StorageErrorKind::ConnectionClosed,
+        detail: detail.to_owned(),
+        inner: error.map(|e| Box::new(e) as _),
+    }
+}
+
+pub fn internal_error<E>(detail: &str, error: Option<E>) -> StorageError
+where
+    E: 'static + error::Error + Send + Sync,
+{
+    StorageError {
+        kind: StorageErrorKind::InternalError,
         detail: detail.to_owned(),
         inner: error.map(|e| Box::new(e) as _),
     }

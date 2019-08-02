@@ -5,7 +5,7 @@ use clap::{App, Arg, SubCommand};
 use futures::future::{ready, TryFutureExt};
 use futures::stream::TryStreamExt;
 
-use file_store::backends::FileBackend;
+use file_store::backends::{B2Backend, FileBackend};
 use file_store::executor::run;
 use file_store::{FileStore, ObjectPath, StorageResult};
 
@@ -26,7 +26,7 @@ async fn ls(filestore: FileStore, path: ObjectPath) -> StorageResult<()> {
 
 fn main() {
     let matches = App::new("fs")
-        .about("Access file storage systems")
+        .about("Access storage systems")
         .arg(
             Arg::with_name("storage")
                 .display_order(0)
@@ -42,12 +42,23 @@ fn main() {
                 .help("The root path for the storage system.")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("id")
+                .long("id")
+                .help("The user identifier (username, etc.) for the storage system.")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("secret")
+                .long("secret")
+                .help("The secret (password, etc.) for the storage system.")
+                .takes_value(true),
+        )
         .subcommand(
             SubCommand::with_name("ls").about("Lists files.").arg(
                 Arg::with_name("path")
                     .help("The path to list.")
-                    .takes_value(true)
-                    .required(true),
+                    .takes_value(true),
             ),
         )
         .get_matches();
@@ -67,6 +78,31 @@ fn main() {
 
             FileBackend::connect(Path::new(root))
         }
+        Some("b2") => {
+            let key_id = match matches.value_of("id") {
+                Some(k) => k,
+                None => {
+                    println!(
+                        "B2 storage requires you to supply the --id option, it should be the application key identifier.\n\n{}",
+                        matches.usage()
+                    );
+                    return;
+                }
+            };
+
+            let key = match matches.value_of("secret") {
+                Some(k) => k,
+                None => {
+                    println!(
+                        "B2 storage requires you to supply the --secret option, it should be the application key.\n\n{}",
+                        matches.usage()
+                    );
+                    return;
+                }
+            };
+
+            B2Backend::connect(key_id, key)
+        }
         _ => {
             println!("Unknown storage system.\n\n{}", matches.usage());
             return;
@@ -83,10 +119,7 @@ fn main() {
                         return;
                     }
                 },
-                None => {
-                    println!("No local path specified.\n\n{}", matches.usage());
-                    return;
-                }
+                None => ObjectPath::new("").unwrap(),
             };
 
             fsfuture.and_then(|fs| ls(fs, path))
@@ -97,5 +130,8 @@ fn main() {
         }
     };
 
-    run(future).unwrap().unwrap();
+    match run(future).unwrap() {
+        Ok(()) => (),
+        Err(e) => println!("{}", e),
+    }
 }

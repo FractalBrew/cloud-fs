@@ -14,6 +14,9 @@ use hyper::server::Server;
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response};
 
+use storage_types::b2::requests::*;
+use storage_types::b2::responses::*;
+
 use crate::runner::TestResult;
 
 struct B2ServerState {}

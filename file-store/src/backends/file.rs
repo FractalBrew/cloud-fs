@@ -2,6 +2,7 @@
 use std::convert::TryFrom;
 use std::fs::Metadata;
 use std::io;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -266,9 +267,9 @@ impl FileBackend {
                 ))
             } else {
                 Ok(FileStore {
-                    backend: BackendImplementation::File(FileBackend {
+                    backend: BackendImplementation::File(Box::new(FileBackend {
                         space: FileSpace { base: target },
-                    }),
+                    })),
                 })
             }
         })
@@ -280,7 +281,7 @@ impl TryFrom<FileStore> for FileBackend {
 
     fn try_from(file_store: FileStore) -> StorageResult<FileBackend> {
         if let BackendImplementation::File(b) = file_store.backend {
-            Ok(b)
+            Ok(b.deref().clone())
         } else {
             Err(error::invalid_settings::<StorageError>(
                 "FileStore does not hold a FileBackend",

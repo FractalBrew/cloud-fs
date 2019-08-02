@@ -61,10 +61,10 @@ macro_rules! call_backend {
 pub(crate) enum BackendImplementation {
     #[cfg(feature = "file")]
     /// The [file backend](struct.FileBackend.html).
-    File(FileBackend),
+    File(Box<FileBackend>),
     #[cfg(feature = "b2")]
     /// The [file backend](struct.FileBackend.html).
-    B2(B2Backend),
+    B2(Box<B2Backend>),
 }
 
 /// The trait that every storage backend must implement at a minimum.

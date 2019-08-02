@@ -6,11 +6,15 @@ use std::sync::Arc;
 use base64::encode;
 use futures::compat::*;
 use futures::lock::Mutex;
+use http::request;
 use hyper::body::Body;
 use hyper::client::connect::HttpConnector;
 use hyper::client::Client as HyperClient;
 use hyper::Request;
 use hyper_tls::HttpsConnector;
+use serde_json::from_reader;
+
+use storage_types::b2::responses::*;
 
 use super::{Backend, BackendImplementation, StorageImpl};
 use crate::filestore::FileStore;
@@ -53,16 +57,10 @@ struct B2Settings {
 }
 
 #[derive(Clone, Debug)]
-struct B2Session {
-    authorization_token: String,
-    host: String,
-}
-
-#[derive(Clone, Debug)]
 struct B2Client {
     client: Client,
     settings: B2Settings,
-    session: Arc<Mutex<Option<B2Session>>>,
+    session: Arc<Mutex<Option<AuthorizeAccountResponse>>>,
 }
 
 impl B2Client {
@@ -93,21 +91,85 @@ impl B2Client {
         format!("{}/b2api/v{}/{}", host, API_VERSION, method)
     }
 
-    async fn start_session(&self) -> StorageResult<B2Session> {
+    async fn request<R>(
+        &self,
+        host: &str,
+        method: &str,
+        mut builder: request::Builder,
+        body: Body,
+    ) -> StorageResult<R>
+    where
+        for<'de> R: serde::de::Deserialize<'de>,
+    {
+        let request = builder.uri(self.api_url(host, method)).body(body)?;
+
+        let response = self.client.request(request).compat().await?;
+        let (meta, body) = response.into_parts();
+
+        if meta.status.is_success() {
+            match from_reader(BlockingStreamReader::from_stream(body.compat())) {
+                Ok(r) => Ok(r),
+                Err(e) => Err(error::invalid_data(
+                    &format!("Unable to parse response from {}.", method),
+                    Some(e),
+                )),
+            }
+        } else {
+            let error: ErrorResponse =
+                match from_reader(BlockingStreamReader::from_stream(body.compat())) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(error::invalid_data(
+                            &format!("Unable to parse error response from {}.", method),
+                            Some(e),
+                        ))
+                    }
+                };
+
+            match (error.status, error.code.as_str()) {
+                (400, "bad_request") => {
+                    Err(error::internal_error::<StorageError>(&error.message, None))
+                }
+                (401, "unauthorized") => Err(error::access_denied::<StorageError>(
+                    "The application key id or key were not recognized.",
+                    None,
+                )),
+                (401, "bad_auth_token") => Err(error::access_denied::<StorageError>(
+                    "The application key id or key were not recognized.",
+                    None,
+                )),
+                (401, "unsupported") => {
+                    Err(error::internal_error::<StorageError>(&error.message, None))
+                }
+                _ => Err(error::other_error::<StorageError>(
+                    &format!(
+                        "Unknown B2 API failure {}: {}, {}",
+                        error.status, error.code, error.message
+                    ),
+                    None,
+                )),
+            }
+        }
+    }
+
+    async fn start_session(&self) -> StorageResult<AuthorizeAccountResponse> {
         let secret = format!(
             "Basic {}",
             encode(&format!("{}:{}", self.settings.key_id, self.settings.key))
         );
-        let request = Request::get(self.api_url(&self.settings.host, "b2_authorize_account"))
-            .header("Authorization", secret)
-            .body(Body::empty())?;
+        let mut builder = Request::builder();
+        builder.method("GET").header("Authorization", secret);
 
-        let response = self.client.request(request).compat().await?;
-
-        Err(error::other_error::<StorageError>("foo", None))
+        self.request(
+            &self.settings.host,
+            "b2_authorize_account",
+            builder,
+            Body::empty(),
+        )
+        .await
     }
 
-    async fn session(&self) -> StorageResult<B2Session> {
+    async fn session(&self) -> StorageResult<AuthorizeAccountResponse> {
         let mut session = self.session.lock().await;
         if let Some(ref s) = session.deref() {
             Ok(s.clone())
@@ -155,10 +217,10 @@ impl B2BackendBuilder {
             let client = B2Client::build(self.settings.clone()).await?;
 
             Ok(FileStore {
-                backend: BackendImplementation::B2(B2Backend {
+                backend: BackendImplementation::B2(Box::new(B2Backend {
                     settings: self.settings,
                     client,
-                }),
+                })),
             })
         })
     }
@@ -169,7 +231,7 @@ impl TryFrom<FileStore> for B2Backend {
 
     fn try_from(file_store: FileStore) -> StorageResult<B2Backend> {
         if let BackendImplementation::B2(b) = file_store.backend {
-            Ok(b)
+            Ok(b.deref().clone())
         } else {
             Err(error::invalid_settings::<StorageError>(
                 "FileStore does not hold a FileBackend",
