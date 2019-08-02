@@ -93,7 +93,7 @@ impl B2Client {
 
     async fn request<R>(
         &self,
-        host: &str,
+        session: Option<AuthorizeAccountResponse>,
         method: &str,
         mut builder: request::Builder,
         body: Body,
@@ -101,7 +101,24 @@ impl B2Client {
     where
         for<'de> R: serde::de::Deserialize<'de>,
     {
-        let request = builder.uri(self.api_url(host, method)).body(body)?;
+        match session {
+            Some(sess) => {
+                builder
+                    .uri(self.api_url(&sess.api_url, method))
+                    .header("Authorization", sess.authorization_token);
+            }
+            None => {
+                let secret = format!(
+                    "Basic {}",
+                    encode(&format!("{}:{}", self.settings.key_id, self.settings.key))
+                );
+                builder
+                    .uri(self.api_url(&self.settings.host, method))
+                    .header("Authorization", secret);
+            }
+        };
+
+        let request = builder.body(body)?;
 
         let response = self.client.request(request).compat().await?;
         let (meta, body) = response.into_parts();
@@ -153,20 +170,11 @@ impl B2Client {
     }
 
     async fn start_session(&self) -> StorageResult<AuthorizeAccountResponse> {
-        let secret = format!(
-            "Basic {}",
-            encode(&format!("{}:{}", self.settings.key_id, self.settings.key))
-        );
         let mut builder = Request::builder();
-        builder.method("GET").header("Authorization", secret);
+        builder.method("GET");
 
-        self.request(
-            &self.settings.host,
-            "b2_authorize_account",
-            builder,
-            Body::empty(),
-        )
-        .await
+        self.request(None, "b2_authorize_account", builder, Body::empty())
+            .await
     }
 
     async fn session(&self) -> StorageResult<AuthorizeAccountResponse> {
