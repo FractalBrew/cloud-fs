@@ -1,0 +1,39 @@
+name: fs
+about: Access storage systems.
+backends:
+  - file:
+      about: Access local file storage.
+      args:
+        - root:
+            help: The root directory for the storage.
+            long: root
+            value_name: ROOT
+            takes_value: true
+            required: true
+  - b2:
+      about: Access backblaze based storage.
+      args:
+        - key-id:
+            help: The application key identifier.
+            long: key-id
+            value_name: KEYID
+            takes_value: true
+            required: true
+        - key:
+            help: The application key.
+            long: key
+            value_name: KEY
+            takes_value: true
+            required: true
+        - root:
+            help: Sets a root for the paths.
+            long: root
+            value_name: ROOT
+            takes_value: true
+commands:
+  - ls:
+      about: Lists files in the storage system.
+      args:
+        - prefix:
+            help: Only list files with this prefix.
+            takes_value: true

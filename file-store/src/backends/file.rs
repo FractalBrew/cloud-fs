@@ -127,7 +127,7 @@ fn directory_stream(
                             path.push_part(&filename);
                             Ok((path, metadata))
                         }
-                        Err(e) => Err(e),
+                        Err(e) => Err(e)
                     },
                 )
             })

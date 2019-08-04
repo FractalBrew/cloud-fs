@@ -169,7 +169,7 @@ impl B2Client {
         }
     }
 
-    async fn start_session(&self) -> StorageResult<AuthorizeAccountResponse> {
+    async fn b2_authorize_account(&self) ->StorageResult<AuthorizeAccountResponse> {
         let mut builder = Request::builder();
         builder.method("GET");
 
@@ -182,7 +182,7 @@ impl B2Client {
         if let Some(ref s) = session.deref() {
             Ok(s.clone())
         } else {
-            let new_session = self.start_session().await?;
+            let new_session = self.b2_authorize_account().await?;
             session.replace(new_session.clone());
             Ok(new_session)
         }
