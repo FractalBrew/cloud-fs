@@ -46,13 +46,18 @@ where
     stream.map_err(move |e| get_storage_error(e, path.clone()))
 }
 
-fn get_object(path: ObjectPath, metadata: &Metadata) -> Object {
-    let (object_type, size) = if metadata.is_file() {
-        (ObjectType::File, metadata.len())
-    } else if metadata.is_dir() {
-        (ObjectType::Directory, 0)
-    } else {
-        (ObjectType::Unknown, 0)
+fn get_object(path: ObjectPath, metadata: Option<Metadata>) -> Object {
+    let (object_type, size) = match metadata {
+        Some(m) => {
+            if m.is_file() {
+                (ObjectType::File, m.len())
+            } else if m.is_dir() {
+                (ObjectType::Directory, 0)
+            } else {
+                (ObjectType::Unknown, 0)
+            }
+        }
+        None => (ObjectType::Unknown, 0),
     };
 
     Object {
@@ -81,7 +86,7 @@ impl FileSpace {
 fn directory_stream(
     space: &FileSpace,
     path: ObjectPath,
-) -> impl Stream<Item = StorageResult<(ObjectPath, Metadata)>> {
+) -> impl Stream<Item = StorageResult<(ObjectPath, Option<Metadata>)>> {
     #[allow(clippy::needless_lifetimes)]
     async fn build_base(
         space: &FileSpace,
@@ -99,11 +104,14 @@ fn directory_stream(
     async fn start_stream(
         space: FileSpace,
         path: ObjectPath,
-    ) -> impl Stream<Item = StorageResult<(ObjectPath, Metadata)>> {
+    ) -> impl Stream<Item = StorageResult<(ObjectPath, Option<Metadata>)>> {
         let stream = match build_base(&space, path.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                return once(ready::<StorageResult<(ObjectPath, Metadata)>>(Err(e))).left_stream()
+                return once(ready::<StorageResult<(ObjectPath, Option<Metadata>)>>(Err(
+                    e,
+                )))
+                .left_stream()
             }
         };
 
@@ -112,22 +120,24 @@ fn directory_stream(
                 let fname = direntry.file_name();
                 let mut path = path.clone();
                 wrap_future(symlink_metadata(direntry.path()).compat(), path.clone()).map(
-                    move |result| match result {
-                        Ok(metadata) => {
-                            let filename = match fname.into_string() {
-                                Ok(f) => f,
-                                Err(_) => {
-                                    return Err(error::invalid_data::<StorageError>(
-                                        "Unable to convert OSString.",
-                                        None,
-                                    ))
-                                }
-                            };
+                    move |result| {
+                        let filename = match fname.into_string() {
+                            Ok(f) => f,
+                            Err(_) => {
+                                return Err(error::invalid_data::<StorageError>(
+                                    "Unable to convert OSString.",
+                                    None,
+                                ))
+                            }
+                        };
 
-                            path.push_part(&filename);
-                            Ok((path, metadata))
-                        }
-                        Err(e) => Err(e),
+                        path.push_part(&filename);
+                        let maybe_meta = match result {
+                            Ok(m) => Some(m),
+                            Err(_) => None,
+                        };
+
+                        Ok((path, maybe_meta))
                     },
                 )
             })
@@ -137,7 +147,7 @@ fn directory_stream(
     start_stream(space.clone(), path).flatten_stream()
 }
 
-type FileList = StorageResult<(ObjectPath, Metadata)>;
+type FileList = StorageResult<(ObjectPath, Option<Metadata>)>;
 struct FileLister {
     stream: Pin<Box<MergedStreams<FileList>>>,
     space: FileSpace,
@@ -169,13 +179,15 @@ impl Stream for FileLister {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<Object> {
         loop {
             match self.stream.as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok((path, metadata)))) => {
+                Poll::Ready(Some(Ok((path, maybe_metadata)))) => {
                     if path.starts_with(&self.prefix) {
-                        if metadata.is_dir() {
-                            self.add_directory(path.clone());
+                        if let Some(ref metadata) = maybe_metadata {
+                            if metadata.is_dir() {
+                                self.add_directory(path.clone());
+                            }
                         }
 
-                        return Poll::Ready(Some(Ok(get_object(path, &metadata))));
+                        return Poll::Ready(Some(Ok(get_object(path, maybe_metadata))));
                     }
                 }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
@@ -318,12 +330,17 @@ impl StorageImpl for FileBackend {
     fn get_object(&self, path: ObjectPath) -> ObjectFuture {
         async fn get(space: FileSpace, path: ObjectPath) -> StorageResult<Object> {
             let target = space.get_std_path(&path)?;
-            let metadata = match symlink_metadata(target.clone()).compat().await {
-                Ok(m) => m,
-                Err(e) => return Err(get_storage_error(e, path)),
-            };
 
-            Ok(get_object(path, &metadata))
+            match symlink_metadata(target.clone()).compat().await {
+                Ok(m) => Ok(get_object(path, Some(m))),
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::NotFound {
+                        Err(error::not_found(path, Some(e)))
+                    } else {
+                        Ok(get_object(path, None))
+                    }
+                }
+            }
         }
 
         ObjectFuture::from_future(get(self.space.clone(), path))
