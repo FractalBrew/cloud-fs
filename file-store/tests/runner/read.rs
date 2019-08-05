@@ -32,7 +32,7 @@ fn compare_file(
     Ok(())
 }
 
-pub async fn test_list_files(fs: &FileStore, _context: &TestContext) -> TestResult<()> {
+pub async fn test_list_objects(fs: &FileStore, _context: &TestContext) -> TestResult<()> {
     async fn test_list<'a>(
         fs: &'a FileStore,
         path: &'static str,
@@ -92,26 +92,31 @@ pub async fn test_list_files(fs: &FileStore, _context: &TestContext) -> TestResu
 
     test_list(fs, "", allfiles).await?;
 
-    test_list(
-        fs,
-        "dir2",
-        vec![
-            ("dir2/0foo", ObjectType::File, 0),
-            ("dir2/1bar", ObjectType::File, 0),
-            ("dir2/5diz", ObjectType::File, 0),
-            ("dir2/bar", ObjectType::File, 0),
-            ("dir2/daz", ObjectType::File, 300),
-            ("dir2/foo", ObjectType::File, 0),
-            ("dir2/hop", ObjectType::File, 0),
-            ("dir2/yu", ObjectType::File, 0),
-        ],
-    )
-    .await?;
+    let mut prefixed = vec![
+        ("dir2/0foo", ObjectType::File, 0),
+        ("dir2/1bar", ObjectType::File, 0),
+        ("dir2/5diz", ObjectType::File, 0),
+        ("dir2/bar", ObjectType::File, 0),
+        ("dir2/daz", ObjectType::File, 300),
+        ("dir2/foo", ObjectType::File, 0),
+        ("dir2/hop", ObjectType::File, 0),
+        ("dir2/yu", ObjectType::File, 0),
+    ];
+
+    test_list(fs, "dir2/", prefixed.clone()).await?;
+
+    if fs.backend_type() == Backend::File {
+        prefixed.extend(vec![("dir2", ObjectType::Directory, 0)]);
+    }
+
+    test_list(fs, "dir2", prefixed.clone()).await?;
+
+    test_list(fs, "dir", prefixed.clone()).await?;
 
     Ok(())
 }
 
-pub async fn test_get_file(fs: &FileStore, _context: &TestContext) -> TestResult<()> {
+pub async fn test_get_object(fs: &FileStore, _context: &TestContext) -> TestResult<()> {
     async fn test_pass(
         fs: &FileStore,
         path: &str,

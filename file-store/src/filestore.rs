@@ -30,9 +30,9 @@ impl FileStore {
     ///
     /// Because the majority of cloud storage systems do not really have a
     /// notion of directories and files, just file identifiers, this function
-    /// will return any objects that have an identifier prefixed by `path`.
-    pub fn list_objects(&self, path: ObjectPath) -> ObjectStreamFuture {
-        call_backend!(&self.backend, list_objects, path)
+    /// will return any objects that have an identifier prefixed by `prefix`.
+    pub fn list_objects(&self, prefix: ObjectPath) -> ObjectStreamFuture {
+        call_backend!(&self.backend, list_objects, prefix)
     }
 
     /// Gets info about the object at the given path.

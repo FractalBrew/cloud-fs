@@ -33,4 +33,4 @@ async fn cleanup(sender: Sender<()>) -> TestResult<()> {
     })
 }
 
-build_tests!(Backend::B2, build_fs, cleanup);
+//build_tests!(Backend::B2, build_fs, cleanup);

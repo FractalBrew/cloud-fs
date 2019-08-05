@@ -225,7 +225,7 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
     Ok(())
 }
 
-pub async fn test_delete_file(fs: &FileStore, context: &TestContext) -> TestResult<()> {
+pub async fn test_delete_object(fs: &FileStore, context: &TestContext) -> TestResult<()> {
     async fn test_pass(fs: &FileStore, context: &TestContext, path: &str) -> TestResult<()> {
         let remote = ObjectPath::new(path)?;
         let target = context.get_target(&remote);
@@ -281,7 +281,7 @@ pub async fn test_delete_file(fs: &FileStore, context: &TestContext) -> TestResu
     Ok(())
 }
 
-pub async fn test_write_from_stream(fs: &FileStore, context: &TestContext) -> TestResult<()> {
+pub async fn test_write_file_from_stream(fs: &FileStore, context: &TestContext) -> TestResult<()> {
     async fn test_write(
         fs: &FileStore,
         context: &TestContext,

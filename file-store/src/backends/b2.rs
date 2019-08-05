@@ -169,7 +169,7 @@ impl B2Client {
         }
     }
 
-    async fn b2_authorize_account(&self) ->StorageResult<AuthorizeAccountResponse> {
+    async fn b2_authorize_account(&self) -> StorageResult<AuthorizeAccountResponse> {
         let mut builder = Request::builder();
         builder.method("GET");
 

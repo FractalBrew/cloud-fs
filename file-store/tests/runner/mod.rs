@@ -211,12 +211,18 @@ macro_rules! make_test {
 
 macro_rules! build_tests {
     ($backend:expr, $setup:expr, $cleanup:expr) => {
-        make_test!($backend, read, test_list_files, $setup, $cleanup);
-        make_test!($backend, read, test_get_file, $setup, $cleanup);
+        make_test!($backend, read, test_list_objects, $setup, $cleanup);
+        make_test!($backend, read, test_get_object, $setup, $cleanup);
         make_test!($backend, read, test_get_file_stream, $setup, $cleanup);
         make_test!($backend, write, test_copy_file, $setup, $cleanup);
         make_test!($backend, write, test_move_file, $setup, $cleanup);
-        make_test!($backend, write, test_delete_file, $setup, $cleanup);
-        make_test!($backend, write, test_write_from_stream, $setup, $cleanup);
+        make_test!($backend, write, test_delete_object, $setup, $cleanup);
+        make_test!(
+            $backend,
+            write,
+            test_write_file_from_stream,
+            $setup,
+            $cleanup
+        );
     };
 }

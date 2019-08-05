@@ -127,7 +127,7 @@ fn directory_stream(
                             path.push_part(&filename);
                             Ok((path, metadata))
                         }
-                        Err(e) => Err(e)
+                        Err(e) => Err(e),
                     },
                 )
             })
@@ -141,16 +141,20 @@ type FileList = StorageResult<(ObjectPath, Metadata)>;
 struct FileLister {
     stream: Pin<Box<MergedStreams<FileList>>>,
     space: FileSpace,
+    prefix: ObjectPath,
 }
 
 impl FileLister {
-    fn list(space: FileSpace, path: ObjectPath) -> FileLister {
+    fn list(space: FileSpace, mut prefix: ObjectPath) -> FileLister {
         let mut lister = FileLister {
             stream: Box::pin(MergedStreams::new()),
             space,
+            prefix: prefix.clone(),
         };
 
-        lister.add_directory(path);
+        prefix.pop_part();
+
+        lister.add_directory(prefix);
         lister
     }
 
@@ -163,17 +167,21 @@ impl Stream for FileLister {
     type Item = StorageResult<Object>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<Object> {
-        match self.stream.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok((path, metadata)))) => {
-                if metadata.is_dir() {
-                    self.add_directory(path.clone());
-                }
+        loop {
+            match self.stream.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok((path, metadata)))) => {
+                    if path.starts_with(&self.prefix) {
+                        if metadata.is_dir() {
+                            self.add_directory(path.clone());
+                        }
 
-                Poll::Ready(Some(Ok(get_object(path, &metadata))))
+                        return Poll::Ready(Some(Ok(get_object(path, &metadata))));
+                    }
+                }
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -211,7 +219,10 @@ impl OldStream for FileReadStream {
 
 #[allow(clippy::needless_lifetimes)]
 async fn delete_directory(space: FileSpace, path: ObjectPath) -> StorageResult<()> {
-    let allfiles = FileLister::list(space.clone(), path.clone())
+    let mut dir_path = path.clone();
+    dir_path.push_part("");
+
+    let allfiles = FileLister::list(space.clone(), dir_path)
         .try_collect::<Vec<Object>>()
         .await?;
     let files = allfiles
@@ -296,12 +307,12 @@ impl StorageImpl for FileBackend {
         Backend::File
     }
 
-    fn list_objects(&self, path: ObjectPath) -> ObjectStreamFuture {
-        async fn list(space: FileSpace, path: ObjectPath) -> StorageResult<ObjectStream> {
-            Ok(ObjectStream::from_stream(FileLister::list(space, path)))
+    fn list_objects(&self, prefix: ObjectPath) -> ObjectStreamFuture {
+        async fn list(space: FileSpace, prefix: ObjectPath) -> StorageResult<ObjectStream> {
+            Ok(ObjectStream::from_stream(FileLister::list(space, prefix)))
         }
 
-        ObjectStreamFuture::from_future(list(self.space.clone(), path))
+        ObjectStreamFuture::from_future(list(self.space.clone(), prefix))
     }
 
     fn get_object(&self, path: ObjectPath) -> ObjectFuture {

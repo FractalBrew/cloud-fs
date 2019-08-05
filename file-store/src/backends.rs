@@ -72,10 +72,10 @@ pub(crate) trait StorageImpl: Clone + Send + 'static {
     /// Returns the type of backend.
     fn backend_type(&self) -> Backend;
 
-    /// Lists the objects that start with the given path.
+    /// Lists the objects that start with the given prefix.
     ///
     /// See [`FileStore.list_objects`](../struct.FileStore.html#method.list_objects).
-    fn list_objects(&self, path: ObjectPath) -> ObjectStreamFuture;
+    fn list_objects(&self, prefix: ObjectPath) -> ObjectStreamFuture;
 
     /// Gets info about the object at the given path.
     ///
