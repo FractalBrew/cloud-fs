@@ -31,7 +31,7 @@ impl TestError {
     where
         E: fmt::Display,
     {
-        TestError::HarnessFailure(format!("{}", error))
+        TestError::HarnessFailure(error.to_string())
     }
 }
 

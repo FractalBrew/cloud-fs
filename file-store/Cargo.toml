@@ -27,3 +27,4 @@ serde_json = { version = "^1.0.40", optional = true }
 
 [dev-dependencies]
 tempfile = "^3.0.8"
+uuid = { version = "0.7", features = ["v4"] }

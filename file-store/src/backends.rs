@@ -9,7 +9,7 @@ use std::fmt;
 use futures::future::TryFutureExt;
 
 #[cfg(feature = "b2")]
-pub use b2::B2Backend;
+pub use b2::{B2Backend, B2BackendBuilder};
 #[cfg(feature = "file")]
 pub use file::FileBackend;
 

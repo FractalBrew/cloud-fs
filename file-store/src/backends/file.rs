@@ -28,7 +28,7 @@ const BUFFER_SIZE: usize = 20 * 1024 * 1024;
 fn get_storage_error(error: io::Error, path: ObjectPath) -> StorageError {
     match error.kind() {
         io::ErrorKind::NotFound => error::not_found(path, Some(error)),
-        _ => error::other_error(&format!("{}", path), Some(error)),
+        _ => error::other_error(&path.to_string(), Some(error)),
     }
 }
 

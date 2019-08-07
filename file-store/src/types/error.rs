@@ -146,7 +146,7 @@ impl fmt::Display for ObjectPathError {
 
 impl From<ObjectPathError> for StorageError {
     fn from(error: ObjectPathError) -> StorageError {
-        invalid_data(&format!("{}", error), Some(error))
+        invalid_data(&error.to_string(), Some(error))
     }
 }
 

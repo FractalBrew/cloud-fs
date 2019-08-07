@@ -27,24 +27,24 @@ const API_VERSION: &str = "2";
 
 impl From<http::Error> for StorageError {
     fn from(error: http::Error) -> StorageError {
-        error::other_error(&format!("{}", error), Some(error))
+        error::other_error(&error.to_string(), Some(error))
     }
 }
 
 impl From<hyper::error::Error> for StorageError {
     fn from(error: hyper::error::Error) -> StorageError {
         if error.is_parse() || error.is_user() {
-            error::invalid_data(&format!("{}", error), Some(error))
+            error::invalid_data(&error.to_string(), Some(error))
         } else if error.is_canceled() {
-            error::cancelled(&format!("{}", error), Some(error))
+            error::cancelled(&error.to_string(), Some(error))
         } else if error.is_closed() {
-            error::connection_closed(&format!("{}", error), Some(error))
+            error::connection_closed(&error.to_string(), Some(error))
         } else if error.is_connect() {
-            error::connection_failed(&format!("{}", error), Some(error))
+            error::connection_failed(&error.to_string(), Some(error))
         } else if error.is_incomplete_message() {
-            error::connection_closed(&format!("{}", error), Some(error))
+            error::connection_closed(&error.to_string(), Some(error))
         } else {
-            error::invalid_data(&format!("{}", error), Some(error))
+            error::invalid_data(&error.to_string(), Some(error))
         }
     }
 }
@@ -200,17 +200,11 @@ impl B2Backend {
     /// Creates a new [`FileStore`](../struct.FileStore.html) instance using the
     /// b2 backend.
     pub fn connect(key_id: &str, key: &str) -> ConnectFuture {
-        B2BackendBuilder::new(key_id, key).build()
+        B2Backend::builder(key_id, key).build()
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct B2BackendBuilder {
-    settings: B2Settings,
-}
-
-impl B2BackendBuilder {
-    pub fn new(key_id: &str, key: &str) -> B2BackendBuilder {
+    /// Creates a new [`B2BackendBuilder`](struct.B2BackendBuilder.html).
+    pub fn builder(key_id: &str, key: &str) -> B2BackendBuilder {
         B2BackendBuilder {
             settings: B2Settings {
                 key_id: key_id.to_owned(),
@@ -219,7 +213,26 @@ impl B2BackendBuilder {
             },
         }
     }
+}
 
+#[derive(Debug, Clone)]
+/// Used to build a [`B2Backend`](struct.B2Backend.html) with some custom
+/// settings.
+pub struct B2BackendBuilder {
+    settings: B2Settings,
+}
+
+impl B2BackendBuilder {
+    /// Sets the API host for B2.
+    ///
+    /// This is generally only used for testing purposes.
+    pub fn host(mut self, host: &str) -> B2BackendBuilder {
+        self.settings.host = host.to_owned();
+        self
+    }
+
+    /// Creates a new B2 based [`FileStore`](../struct.FileStore.html) using
+    /// this builder's settings.
     pub fn build(self) -> ConnectFuture {
         ConnectFuture::from_future(async {
             let client = B2Client::build(self.settings.clone()).await?;

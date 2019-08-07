@@ -117,7 +117,7 @@ impl FileStore {
     {
         let mapped = stream.map(|r| match r {
             Ok(b) => Ok(Data::from_buf(b)),
-            Err(e) => Err(error::other_error(&format!("{}", e), Some(e))),
+            Err(e) => Err(error::other_error(&e.to_string(), Some(e))),
         });
 
         call_backend!(
