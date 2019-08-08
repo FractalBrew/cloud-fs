@@ -6,7 +6,8 @@ use std::path::Path;
 use clap::App;
 use yaml_rust::{Yaml, YamlLoader};
 
-use file_store::backends::{B2Backend, FileBackend};
+use file_store::backends::b2::B2Backend;
+use file_store::backends::file::FileBackend;
 use file_store::executor::run;
 
 use commands::*;

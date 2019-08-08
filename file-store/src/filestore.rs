@@ -12,9 +12,9 @@ use super::types::*;
 /// Provides access to a storage backend.
 ///
 /// `FileStore`s provide the APIs to access files on one of the storage
-/// backends. They are clonable to allow for capturing into closures etc.
+/// backends. They are cheaply clonable to allow for moving into closures etc.
 ///
-/// Normally you would create a `FileStore` from one of the [backend implementations](backends/index.html).
+/// You create a `FileStore` from one of the [backend implementations](backends/index.html).
 #[derive(Clone, Debug)]
 pub struct FileStore {
     pub(crate) backend: BackendImplementation,

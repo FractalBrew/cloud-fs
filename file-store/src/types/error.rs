@@ -126,7 +126,7 @@ impl From<StorageError> for io::Error {
 /// The result type used throughout this crate.
 pub type StorageResult<O> = Result<O, StorageError>;
 
-/// An error encountered when parsing or manipulating an [`ObjectPath`](../struct.ObjectPath.html).
+/// An error encountered when parsing or manipulating an [`ObjectPath`](struct.ObjectPath.html).
 #[derive(Clone, Debug)]
 pub struct ObjectPathError {
     spec: String,

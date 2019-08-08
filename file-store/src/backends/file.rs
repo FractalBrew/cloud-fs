@@ -1,4 +1,16 @@
 //! Accesses files on the local filesystem. Included with the feature "file".
+//!
+//! The [`FileBackend`](struct.FileBackend.html) allows access to the local
+//! file system. It must be instantiated with a local directory which is then
+//! used as the root of the files visible through the returned
+//! [`FileStore`](../../struct.FileStore.html).
+//!
+//! Directories and symlinks cannot be created but will be visible through
+//! [`list_objects`](../../struct.FileStore.html#method.list_objects) and
+//! [`get_object`](../../struct.FileStore.html#method.get_objects).
+//! [`delete_object`](../../struct.FileStore.html#method.delete_object) and
+//! [`write_file_from_stream`](../../struct.FileStore.html#method.write_file_from_stream)
+//! will remove these (in the directory case recursively).
 use std::convert::TryFrom;
 use std::fs::Metadata;
 use std::io;
@@ -54,7 +66,7 @@ fn get_object(path: ObjectPath, metadata: Option<Metadata>) -> Object {
             } else if m.is_dir() {
                 (ObjectType::Directory, 0)
             } else {
-                (ObjectType::Unknown, 0)
+                (ObjectType::Symlink, 0)
             }
         }
         None => (ObjectType::Unknown, 0),
@@ -237,14 +249,14 @@ async fn delete_directory(space: FileSpace, path: ObjectPath) -> StorageResult<(
     let allfiles = FileLister::list(space.clone(), dir_path)
         .try_collect::<Vec<Object>>()
         .await?;
-    let files = allfiles
+    let nondirectories = allfiles
         .iter()
         .filter(|file| file.object_type() != ObjectType::Directory);
     let directories = allfiles
         .iter()
         .filter(|file| file.object_type() == ObjectType::Directory);
 
-    for file in files {
+    for file in nondirectories {
         let target = space.get_std_path(&file.path())?;
         wrap_future(remove_file(target).compat(), file.path()).await?;
     }
@@ -266,15 +278,11 @@ pub struct FileBackend {
 }
 
 impl FileBackend {
-    /// Creates a new [`FileStore`](../struct.FileStore.html) instance using the
+    /// Creates a new [`FileStore`](../../struct.FileStore.html) instance using the
     /// file backend.
     ///
     /// The root path provided must be a directory and is used as the base of
     /// the visible storage.
-    ///
-    /// Directories and symlinks cannot be created but will be visible through
-    /// `list_objects` and `get_object`. `delete_object` and `write_file_from_stream`
-    /// will remove these (in the directory case recursively).
     pub fn connect(root: &Path) -> ConnectFuture {
         let target = root.to_owned();
         ConnectFuture::from_future(async move {

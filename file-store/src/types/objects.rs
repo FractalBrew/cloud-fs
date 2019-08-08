@@ -9,16 +9,17 @@ use super::*;
 ///
 /// This crate really only deals with file manipulations and most backends only
 /// support files (in some cases called objects). Things like directories often
-/// don't really exist. In some cases though some backends do have real
-/// directories and would not support creating a file of the same name without
-/// removing them first. This represents the type of thing that exists at a
-/// particular path.
+/// don't really exist. In some cases though backends do have real directories
+/// and symlinks and would not support creating a file of the same name without
+/// removing them first.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum ObjectType {
     /// A regular file.
     File,
     /// A physical directory.
     Directory,
+    /// A symbolic link.
+    Symlink,
     /// An physical object of unknown type.
     Unknown,
 }
@@ -37,10 +38,24 @@ impl Ord for ObjectType {
             return Ordering::Equal;
         }
 
+        // Values are not exual at this point.
+        match other {
+            // Directories are always sorted earlier.
+            ObjectType::Directory => return Ordering::Greater,
+            // Unknowns are always sorted later.
+            ObjectType::Unknown => return Ordering::Less,
+            _ => (),
+        }
+
         match self {
+            // Directories are always sorted earlier.
             ObjectType::Directory => Ordering::Less,
-            ObjectType::File => other.cmp(self),
+            // Unknowns are always sorted later.
             ObjectType::Unknown => Ordering::Greater,
+            // Other must be a symlink here.
+            ObjectType::File => Ordering::Less,
+            // Other myst be a file here.
+            ObjectType::Symlink => Ordering::Greater,
         }
     }
 }
@@ -50,6 +65,7 @@ impl fmt::Display for ObjectType {
         match self {
             ObjectType::File => f.pad("file"),
             ObjectType::Directory => f.pad("dir"),
+            ObjectType::Symlink => f.pad("symlink"),
             ObjectType::Unknown => f.pad("unknown"),
         }
     }

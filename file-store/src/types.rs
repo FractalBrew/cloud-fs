@@ -30,7 +30,7 @@ pub type ConnectFuture = WrappedFuture<StorageResult<FileStore>>;
 pub type ObjectStream = WrappedStream<StorageResult<Object>>;
 /// A future that returns an [`ObjectStream`](type.ObjectStream.html).
 pub type ObjectStreamFuture = WrappedFuture<StorageResult<ObjectStream>>;
-/// A future that returns an [`Object`](type.Object.html).
+/// A future that returns an [`Object`](struct.Object.html).
 pub type ObjectFuture = WrappedFuture<StorageResult<Object>>;
 /// A future that resolves whenever the requested operation is complete.
 pub type OperationCompleteFuture = WrappedFuture<StorageResult<()>>;

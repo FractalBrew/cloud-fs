@@ -1,17 +1,17 @@
 //! Contains the different storage backend implementations.
+//!
+//! Each backend allows for accessing files in a different storage system.
+//! Normally you just crate a [`FileStore`](../struct.FileStore.html) from the
+//! backend and then everything else is done by calls to the `FileStore` which
+//! generally behave the same regardless of the backend.
 #[cfg(feature = "b2")]
-mod b2;
+pub mod b2;
 #[cfg(feature = "file")]
-mod file;
+pub mod file;
 
 use std::fmt;
 
 use futures::future::TryFutureExt;
-
-#[cfg(feature = "b2")]
-pub use b2::{B2Backend, B2BackendBuilder};
-#[cfg(feature = "file")]
-pub use file::FileBackend;
 
 use crate::types::*;
 
@@ -61,10 +61,10 @@ macro_rules! call_backend {
 pub(crate) enum BackendImplementation {
     #[cfg(feature = "file")]
     /// The [file backend](struct.FileBackend.html).
-    File(Box<FileBackend>),
+    File(Box<file::FileBackend>),
     #[cfg(feature = "b2")]
     /// The [file backend](struct.FileBackend.html).
-    B2(Box<B2Backend>),
+    B2(Box<b2::B2Backend>),
 }
 
 /// The trait that every storage backend must implement at a minimum.

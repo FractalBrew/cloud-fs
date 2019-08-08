@@ -1,4 +1,32 @@
 //! Accesses files in a Backblaze B2 bucket. Included with the feature "b2".
+//!
+//! The [`B2Backend`](struct.B2Backend.html) can be initialized with as little
+//! as a key id and key (these can be the master key or an application key). It
+//! also supports a [`builder`](struct.B2Backend.html#method.builder) pattern to
+//! add additional configuration including a root path to restrict the files
+//! visible.
+//!
+//! [`ObjectPath`](../../struct.ObjectPath.html)'s represent the names of files.
+//! The first directory part of a path (the string up until the first `/`) is
+//! use as the name of the bucket. The rest can be freeform though people
+//! generally use a regular path string separated by `/` characters to form
+//! a hierarchy. Attempting to write a file at the bucket level will fail
+//! however writing a file inside a bucket that does not yet exist will create
+//! the bucket (assuming the key has permission to do so).
+//!
+//! In order to be compatible with other backends, but still include some useful
+//! functionality file versioning (if enabled for the bucket) is currently
+//! handled as follows:
+//! * Deleting a file will delete all of its versions.
+//! * Replacing a file will add a new version.
+//!
+//! Setting a file's mimetype on uploas is not currently supported. The backend
+//! will rely on B2's automatic mimetype detection to set the mimetype. This
+//! uses the file's extension to set a mimetype from a [list of mappings](https://www.backblaze.com/b2/docs/content-types.html)
+//! and falls back to `application/octet-stream` in case of failure.
+//!
+//! The last modified time of an uploaded file will be set to the time that the
+//! upload began.
 use std::convert::TryFrom;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -197,8 +225,11 @@ pub struct B2Backend {
 }
 
 impl B2Backend {
-    /// Creates a new [`FileStore`](../struct.FileStore.html) instance using the
+    /// Creates a new [`FileStore`](../../struct.FileStore.html) instance using the
     /// b2 backend.
+    ///
+    /// When constructed in this manner the root for all paths will be at the
+    /// account level.
     pub fn connect(key_id: &str, key: &str) -> ConnectFuture {
         B2Backend::builder(key_id, key).build()
     }
@@ -231,7 +262,7 @@ impl B2BackendBuilder {
         self
     }
 
-    /// Creates a new B2 based [`FileStore`](../struct.FileStore.html) using
+    /// Creates a new B2 based [`FileStore`](../../struct.FileStore.html) using
     /// this builder's settings.
     pub fn build(self) -> ConnectFuture {
         ConnectFuture::from_future(async {

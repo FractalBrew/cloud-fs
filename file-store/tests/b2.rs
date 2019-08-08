@@ -10,7 +10,7 @@ mod mocks;
 
 use futures::channel::oneshot::Sender;
 
-use file_store::backends::B2Backend;
+use file_store::backends::b2::B2Backend;
 use file_store::backends::Backend;
 use file_store::executor::spawn;
 use file_store::FileStore;
