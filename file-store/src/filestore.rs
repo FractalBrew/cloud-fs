@@ -40,6 +40,13 @@ impl FileStore {
     /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if no object exists at the fiven path.
     pub fn get_object(&self, path: ObjectPath) -> ObjectFuture {
+        if path.is_dir_prefix() {
+            return ObjectFuture::from_value(Err(error::invalid_path(
+                path,
+                "Object paths cannot be empty or end with a '/' character.",
+            )));
+        }
+
         call_backend!(&self.backend, get_object, path)
     }
 
@@ -52,6 +59,13 @@ impl FileStore {
     /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if the object at the path does not exist or is not a file.
     pub fn get_file_stream(&self, path: ObjectPath) -> DataStreamFuture {
+        if path.is_dir_prefix() {
+            return DataStreamFuture::from_value(Err(error::invalid_path(
+                path,
+                "Object paths cannot be empty or end with a '/' character.",
+            )));
+        }
+
         call_backend!(&self.backend, get_file_stream, path)
     }
 
@@ -61,6 +75,24 @@ impl FileStore {
     /// require retrieving the entire file and then sending it to the new
     /// location.
     pub fn copy_file(&self, path: ObjectPath, target: ObjectPath) -> CopyCompleteFuture {
+        if path.is_dir_prefix() {
+            return CopyCompleteFuture::from_value(Err(TransferError::SourceError(
+                error::invalid_path(
+                    path,
+                    "Object paths cannot be empty or end with a '/' character.",
+                ),
+            )));
+        }
+
+        if target.is_dir_prefix() {
+            return CopyCompleteFuture::from_value(Err(TransferError::TargetError(
+                error::invalid_path(
+                    target,
+                    "Object paths cannot be empty or end with a '/' character.",
+                ),
+            )));
+        }
+
         call_backend!(&self.backend, copy_file, path, target)
     }
 
@@ -70,6 +102,24 @@ impl FileStore {
     /// require retrieving the entire file and then sending it to the new
     /// location.
     pub fn move_file(&self, path: ObjectPath, target: ObjectPath) -> MoveCompleteFuture {
+        if path.is_dir_prefix() {
+            return MoveCompleteFuture::from_value(Err(TransferError::SourceError(
+                error::invalid_path(
+                    path,
+                    "Object paths cannot be empty or end with a '/' character.",
+                ),
+            )));
+        }
+
+        if target.is_dir_prefix() {
+            return MoveCompleteFuture::from_value(Err(TransferError::TargetError(
+                error::invalid_path(
+                    target,
+                    "Object paths cannot be empty or end with a '/' character.",
+                ),
+            )));
+        }
+
         call_backend!(&self.backend, move_file, path, target)
     }
 
@@ -81,6 +131,13 @@ impl FileStore {
     /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if the object does not exist.
     pub fn delete_object(&self, path: ObjectPath) -> OperationCompleteFuture {
+        if path.is_dir_prefix() {
+            return OperationCompleteFuture::from_value(Err(error::invalid_path(
+                path,
+                "Object paths cannot be empty or end with a '/' character.",
+            )));
+        }
+
         call_backend!(&self.backend, delete_object, path)
     }
 
@@ -115,6 +172,15 @@ impl FileStore {
         I: IntoBuf + 'static,
         E: 'static + Error + Send + Sync,
     {
+        if path.is_dir_prefix() {
+            return WriteCompleteFuture::from_value(Err(TransferError::TargetError(
+                error::invalid_path(
+                    path,
+                    "Object paths cannot be empty or end with a '/' character.",
+                ),
+            )));
+        }
+
         let mapped = stream.map(|r| match r {
             Ok(b) => Ok(Data::from_buf(b)),
             Err(e) => Err(error::other_error(&e.to_string(), Some(e))),

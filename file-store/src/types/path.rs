@@ -64,6 +64,11 @@ impl ObjectPath {
     pub fn starts_with(&self, other: &ObjectPath) -> bool {
         self.path.starts_with(&other.path)
     }
+
+    /// Returns whether the path is empty or ends with a `/` character.
+    pub(crate) fn is_dir_prefix(&self) -> bool {
+        self.path.is_empty() || self.path.ends_with('/')
+    }
 }
 
 impl fmt::Display for ObjectPath {
