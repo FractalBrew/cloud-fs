@@ -1,9 +1,11 @@
 //! Object types.
 
 use std::cmp::Ordering;
+use std::convert::TryInto;
 use std::fmt;
 
 use super::*;
+use crate::backends::{ObjectInternals, StorageBackend};
 
 /// An object's type. For most backends this will just be File.
 ///
@@ -78,6 +80,7 @@ impl fmt::Display for ObjectType {
 /// file type that physically exists at a path.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Object {
+    pub(crate) internals: ObjectInternals,
     pub(crate) object_type: ObjectType,
     pub(crate) path: ObjectPath,
     pub(crate) size: u64,
@@ -111,5 +114,64 @@ impl PartialOrd for Object {
 impl Ord for Object {
     fn cmp(&self, other: &Object) -> Ordering {
         self.path.cmp(&other.path)
+    }
+}
+
+/// A type that references an object in storage.
+///
+/// Implemented by [`Object`](struct.Object.html) and anything that can be
+/// converted into an [`ObjectPath`](struct.ObjectPath.html).
+pub trait ObjectReference: Clone + Send + 'static {
+    /// Returns a future that resolves to an object for the specified backend.
+    fn into_object<B>(self, backend: &B) -> ObjectFuture
+    where
+        B: StorageBackend;
+
+    /// Returns an attempt to covert this to an ObjectPath.
+    fn into_path(self) -> StorageResult<ObjectPath>;
+}
+
+impl ObjectReference for Object {
+    fn into_object<B>(self, backend: &B) -> ObjectFuture
+    where
+        B: StorageBackend,
+    {
+        if self.internals.is_from_backend(backend.backend_type()) {
+            ObjectFuture::from_value(Ok(self))
+        } else {
+            self.path.into_object(backend)
+        }
+    }
+
+    fn into_path(self) -> StorageResult<ObjectPath> {
+        Ok(self.path)
+    }
+}
+
+impl<P> ObjectReference for P
+where
+    P: TryInto<ObjectPath> + Clone + Send + 'static,
+    P::Error: Into<StorageError>,
+{
+    fn into_object<B>(self, backend: &B) -> ObjectFuture
+    where
+        B: StorageBackend,
+    {
+        match self.try_into() {
+            Ok(path) => {
+                if path.is_dir_prefix() {
+                    return ObjectFuture::from_value(Err(error::invalid_path(
+                        path,
+                        "Object paths cannot be empty or end with a '/' character.",
+                    )));
+                }
+                backend.get_object(path)
+            }
+            Err(e) => ObjectFuture::from_value(Err(e.into())),
+        }
+    }
+
+    fn into_path(self) -> StorageResult<ObjectPath> {
+        self.try_into().map_err(|e| e.into())
     }
 }

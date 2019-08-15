@@ -8,32 +8,34 @@ extern crate file_store;
 mod runner;
 mod mocks;
 
-use futures::channel::oneshot::Sender;
+mod test1 {
+    use futures::channel::oneshot::Sender;
 
-use file_store::backends::b2::B2Backend;
-use file_store::backends::Backend;
-use file_store::executor::spawn;
-use file_store::FileStore;
+    use file_store::backends::b2::B2Backend;
+    use file_store::backends::Backend;
+    use file_store::executor::spawn;
+    use file_store::FileStore;
 
-use mocks::b2_server::build_server;
-use runner::{TestContext, TestError, TestResult};
+    use crate::mocks::b2_server::build_server;
+    use crate::runner::{TestContext, TestError, TestResult};
 
-async fn build_fs(context: &TestContext) -> TestResult<(FileStore, Sender<()>)> {
-    let (addr, server, sender) = build_server(context.get_root())?;
+    async fn build_fs(context: &TestContext) -> TestResult<(FileStore, Sender<()>)> {
+        let (addr, server, sender) = build_server(context.get_fs_root())?;
 
-    let _ = spawn(server);
+        let _ = spawn(server);
 
-    let fs = B2Backend::builder("foo", "bar")
-        .host(&format!("http://{}", addr))
-        .build()
-        .await?;
-    Ok((fs, sender))
+        let fs = B2Backend::builder("foo", "bar")
+            .host(&format!("http://{}", addr))
+            .connect()
+            .await?;
+        Ok((fs, sender))
+    }
+
+    async fn cleanup(sender: Sender<()>) -> TestResult<()> {
+        sender.send(()).map_err(|()| {
+            TestError::HarnessFailure(String::from("Failed to send shutdown to mock b2 server."))
+        })
+    }
+
+    build_tests!("test1", Backend::B2, build_fs, cleanup);
 }
-
-async fn cleanup(sender: Sender<()>) -> TestResult<()> {
-    sender.send(()).map_err(|()| {
-        TestError::HarnessFailure(String::from("Failed to send shutdown to mock b2 server."))
-    })
-}
-
-build_tests!(Backend::B2, build_fs, cleanup);

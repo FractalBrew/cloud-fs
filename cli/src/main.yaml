@@ -25,10 +25,10 @@ backends:
             value_name: KEY
             takes_value: true
             required: true
-        - root:
-            help: Sets a root for the paths.
-            long: root
-            value_name: ROOT
+        - prefix:
+            help: Sets a prefix for the paths.
+            long: prefix
+            value_name: PREFIX
             takes_value: true
 commands:
   - ls:

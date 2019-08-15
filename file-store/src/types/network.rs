@@ -30,10 +30,10 @@ impl fmt::Display for Address {
         self.host.fmt(f)?;
 
         if let Some(p) = self.port {
-            f.write_fmt(format_args!(":{}", p))?;
+            write!(f, ":{}", p)
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 }
 

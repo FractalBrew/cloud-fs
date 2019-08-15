@@ -1,18 +1,18 @@
 //! The generic [`FileStore`](../struct.FileStore.html).
+use std::convert::TryInto;
 use std::error::Error;
 
-use bytes::buf::FromBuf;
 use bytes::IntoBuf;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::Stream;
 
-use super::backends::{Backend, BackendImplementation, StorageImpl};
-use super::types::stream::WrappedStream;
+use super::backends::{Backend, BackendImplementation, StorageBackend};
 use super::types::*;
 
 /// Provides access to a storage backend.
 ///
-/// `FileStore`s provide the APIs to access files on one of the storage
-/// backends. They are cheaply clonable to allow for moving into closures etc.
+/// `FileStore` exposes all of the functionality guaranteed to be implemented by
+/// every backend in a backend-agnostic manner (i.e. no generics). This is the
+/// type you should use if you want your code to be able to use any backend.
 ///
 /// You create a `FileStore` from one of the [backend implementations](backends/index.html).
 #[derive(Clone, Debug)]
@@ -21,32 +21,49 @@ pub struct FileStore {
 }
 
 impl FileStore {
-    /// Retrieves the type of backend that this FileStore is using.
+    /// Retrieves the type of this backend.
     pub fn backend_type(&self) -> Backend {
         call_backend!(&self.backend, backend_type)
     }
 
-    /// Lists the objects that are prefixed by the given path.
+    /// Lists the objects that are prefixed by the given prefix.
     ///
-    /// Because the majority of cloud storage systems do not really have a
-    /// notion of directories and files, just file identifiers, this function
-    /// will return any objects that have an identifier prefixed by `prefix`.
-    pub fn list_objects(&self, prefix: ObjectPath) -> ObjectStreamFuture {
+    /// This will return the entire directory structure under the given prefix.
+    /// Be sure to include a trailing `/` if you only want to include objects
+    /// inside that (possibly virtual) directory. This will only include
+    /// directory objects if those actually exists in the underlying storage.
+    pub fn list_objects<P>(&self, prefix: P) -> ObjectStreamFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
         call_backend!(&self.backend, list_objects, prefix)
+    }
+
+    /// Lists the objects that exist in the given (possibly virtual) directory.
+    ///
+    /// Given a path (ending with a `/` character is optional), all objects
+    /// that have a name beginning with the directory and not including any
+    /// additional `/` character are returned. This will include directory
+    /// objects even if the underlying storage doesn't actually support
+    /// directories to indicate that there are deeper objects not included.
+    pub fn list_directory<P>(&self, dir: P) -> ObjectStreamFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
+        call_backend!(&self.backend, list_directory, dir)
     }
 
     /// Gets info about the object at the given path.
     ///
     /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if no object exists at the fiven path.
-    pub fn get_object(&self, path: ObjectPath) -> ObjectFuture {
-        if path.is_dir_prefix() {
-            return ObjectFuture::from_value(Err(error::invalid_path(
-                path,
-                "Object paths cannot be empty or end with a '/' character.",
-            )));
-        }
-
+    pub fn get_object<P>(&self, path: P) -> ObjectFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
         call_backend!(&self.backend, get_object, path)
     }
 
@@ -58,69 +75,39 @@ impl FileStore {
     ///
     /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if the object at the path does not exist or is not a file.
-    pub fn get_file_stream(&self, path: ObjectPath) -> DataStreamFuture {
-        if path.is_dir_prefix() {
-            return DataStreamFuture::from_value(Err(error::invalid_path(
-                path,
-                "Object paths cannot be empty or end with a '/' character.",
-            )));
-        }
-
-        call_backend!(&self.backend, get_file_stream, path)
+    pub fn get_file_stream<O>(&self, reference: O) -> DataStreamFuture
+    where
+        O: ObjectReference,
+    {
+        call_backend!(&self.backend, get_file_stream, reference)
     }
 
-    /// Copies a file from one path to another within this `FileStore`.
+    /// Copies a file from one path to another within this `Backend`.
     ///
     /// Normally this will be an efficient operation but in some cases it will
     /// require retrieving the entire file and then sending it to the new
     /// location.
-    pub fn copy_file(&self, path: ObjectPath, target: ObjectPath) -> CopyCompleteFuture {
-        if path.is_dir_prefix() {
-            return CopyCompleteFuture::from_value(Err(TransferError::SourceError(
-                error::invalid_path(
-                    path,
-                    "Object paths cannot be empty or end with a '/' character.",
-                ),
-            )));
-        }
-
-        if target.is_dir_prefix() {
-            return CopyCompleteFuture::from_value(Err(TransferError::TargetError(
-                error::invalid_path(
-                    target,
-                    "Object paths cannot be empty or end with a '/' character.",
-                ),
-            )));
-        }
-
-        call_backend!(&self.backend, copy_file, path, target)
+    pub fn copy_file<O, P>(&self, reference: O, target: P) -> CopyCompleteFuture
+    where
+        O: ObjectReference,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
+        call_backend!(&self.backend, copy_file, reference, target)
     }
 
-    /// Moves a file from one path to another within this `FileStore`.
+    /// Moves a file from one path to another within this `Backend`.
     ///
     /// Normally this will be an efficient operation but in some cases it will
     /// require retrieving the entire file and then sending it to the new
     /// location.
-    pub fn move_file(&self, path: ObjectPath, target: ObjectPath) -> MoveCompleteFuture {
-        if path.is_dir_prefix() {
-            return MoveCompleteFuture::from_value(Err(TransferError::SourceError(
-                error::invalid_path(
-                    path,
-                    "Object paths cannot be empty or end with a '/' character.",
-                ),
-            )));
-        }
-
-        if target.is_dir_prefix() {
-            return MoveCompleteFuture::from_value(Err(TransferError::TargetError(
-                error::invalid_path(
-                    target,
-                    "Object paths cannot be empty or end with a '/' character.",
-                ),
-            )));
-        }
-
-        call_backend!(&self.backend, move_file, path, target)
+    pub fn move_file<O, P>(&self, reference: O, target: P) -> MoveCompleteFuture
+    where
+        O: ObjectReference,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
+        call_backend!(&self.backend, move_file, reference, target)
     }
 
     /// Deletes the object at the given path.
@@ -130,15 +117,11 @@ impl FileStore {
     ///
     /// This will return a [`NotFound`](enum.StorageErrorKind.html#variant.NotFound)
     /// error if the object does not exist.
-    pub fn delete_object(&self, path: ObjectPath) -> OperationCompleteFuture {
-        if path.is_dir_prefix() {
-            return OperationCompleteFuture::from_value(Err(error::invalid_path(
-                path,
-                "Object paths cannot be empty or end with a '/' character.",
-            )));
-        }
-
-        call_backend!(&self.backend, delete_object, path)
+    pub fn delete_object<O>(&self, reference: O) -> OperationCompleteFuture
+    where
+        O: ObjectReference,
+    {
+        call_backend!(&self.backend, delete_object, reference)
     }
 
     /// Writes a stream of data to the file at the given path.
@@ -148,12 +131,12 @@ impl FileStore {
     /// along with their contents and replaced with a file). The rationale for
     /// this is that for network based backends not overwriting generally
     /// involves more API calls to check if something is there first. If you
-    /// care about overwriting, call [`get_object`](struct.FileStore.html#method.get_file)
+    /// care about overwriting, call [`get_object`](struct.StorageBackend.html#method.get_file)
     /// first and check the result.
     ///
     /// If this operation fails there are no guarantees about the state of the
     /// file. If that is an issue then you should consider always calling
-    /// [`delete_object`](struct.FileStore.html#method.delete_object) after a
+    /// [`delete_object`](struct.StorageBackend.html#method.delete_object) after a
     /// failure.
     ///
     /// The future returned will only resolve once all the data from the stream
@@ -162,35 +145,14 @@ impl FileStore {
     /// written.
     ///
     /// Any error emitted by the stream will cause this operation to fail.
-    pub fn write_file_from_stream<S, I, E>(
-        &self,
-        path: ObjectPath,
-        stream: S,
-    ) -> WriteCompleteFuture
+    pub fn write_file_from_stream<S, I, E, P>(&self, path: P, stream: S) -> WriteCompleteFuture
     where
         S: Stream<Item = Result<I, E>> + Send + 'static,
         I: IntoBuf + 'static,
         E: 'static + Error + Send + Sync,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
     {
-        if path.is_dir_prefix() {
-            return WriteCompleteFuture::from_value(Err(TransferError::TargetError(
-                error::invalid_path(
-                    path,
-                    "Object paths cannot be empty or end with a '/' character.",
-                ),
-            )));
-        }
-
-        let mapped = stream.map(|r| match r {
-            Ok(b) => Ok(Data::from_buf(b)),
-            Err(e) => Err(error::other_error(&e.to_string(), Some(e))),
-        });
-
-        call_backend!(
-            &self.backend,
-            write_file_from_stream,
-            path,
-            WrappedStream::<Data>::from_stream(mapped)
-        )
+        call_backend!(&self.backend, write_file_from_stream, path, stream)
     }
 }

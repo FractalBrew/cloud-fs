@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::error;
 use std::fmt;
 use std::io;
@@ -7,6 +8,8 @@ use super::ObjectPath;
 /// The kind of an [`StorageError`](struct.StorageError.html).
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageErrorKind {
+    /// An error occurred while parsing an ObjectPath.
+    ObjectPathParse(String),
     /// An error returned when attempting to access an invalid path.
     InvalidPath(ObjectPath),
     /// The object requested was not found.
@@ -21,6 +24,8 @@ pub enum StorageErrorKind {
     InvalidData,
     /// The credentials supplied were denied access.
     AccessDenied,
+    /// Access has expired. Reconnecting may solve the issue.
+    AccessExpired,
     /// An error returned if the configuration for a backend was invalid
     /// somehow.
     InvalidSettings,
@@ -78,6 +83,9 @@ macro_rules! write {
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.kind {
+            StorageErrorKind::ObjectPathParse(s) => {
+                write!(f, "Failed to parse '{}'. {}", &s, &self.detail)
+            }
             StorageErrorKind::InvalidPath(p) => write!(f, "The path '{}' was invalid", p),
             StorageErrorKind::NotFound(p) => write!(f, "The path '{}' was not found", p),
             StorageErrorKind::InvalidData => write!(f, "Invalid data: {}", &self.detail),
@@ -95,6 +103,7 @@ impl fmt::Display for StorageError {
                 write!(f, "An internal error occurred: {}", &self.detail)
             }
             StorageErrorKind::AccessDenied => write!(f, "Access was denied: {}", &self.detail),
+            StorageErrorKind::AccessExpired => write!(f, "Access has expired: {}", &self.detail),
             StorageErrorKind::InvalidSettings => write!(
                 f,
                 "Some of the settings passed were invalid: {}",
@@ -107,6 +116,7 @@ impl fmt::Display for StorageError {
 impl From<StorageError> for io::Error {
     fn from(error: StorageError) -> io::Error {
         let kind = match error.kind() {
+            StorageErrorKind::ObjectPathParse(_) => io::ErrorKind::InvalidData,
             StorageErrorKind::InvalidPath(_) => io::ErrorKind::InvalidData,
             StorageErrorKind::NotFound(_) => io::ErrorKind::NotFound,
             StorageErrorKind::InvalidData => io::ErrorKind::InvalidData,
@@ -117,38 +127,21 @@ impl From<StorageError> for io::Error {
             StorageErrorKind::InternalError => io::ErrorKind::Other,
             StorageErrorKind::Other => io::ErrorKind::Other,
             StorageErrorKind::AccessDenied => io::ErrorKind::PermissionDenied,
+            StorageErrorKind::AccessExpired => io::ErrorKind::PermissionDenied,
         };
 
         io::Error::new(kind, error)
     }
 }
 
+impl From<Infallible> for StorageError {
+    fn from(_: Infallible) -> StorageError {
+        unimplemented!();
+    }
+}
+
 /// The result type used throughout this crate.
 pub type StorageResult<O> = Result<O, StorageError>;
-
-/// An error encountered when parsing or manipulating an [`ObjectPath`](struct.ObjectPath.html).
-#[derive(Clone, Debug)]
-pub struct ObjectPathError {
-    spec: String,
-    message: String,
-}
-
-impl error::Error for ObjectPathError {}
-
-impl fmt::Display for ObjectPathError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.pad(&format!(
-            "Failed to parse '{}'. {}",
-            &self.spec, &self.message
-        ))
-    }
-}
-
-impl From<ObjectPathError> for StorageError {
-    fn from(error: ObjectPathError) -> StorageError {
-        invalid_data(&error.to_string(), Some(error))
-    }
-}
 
 /// An error that occurs while copying a file.
 #[derive(Debug)]
@@ -159,10 +152,11 @@ pub enum TransferError {
     TargetError(StorageError),
 }
 
-pub fn parse_error(spec: &str, message: &str) -> ObjectPathError {
-    ObjectPathError {
-        spec: spec.to_owned(),
-        message: message.to_owned(),
+pub fn parse_error(spec: &str, message: &str) -> StorageError {
+    StorageError {
+        kind: StorageErrorKind::ObjectPathParse(spec.to_owned()),
+        detail: message.to_owned(),
+        inner: None,
     }
 }
 
@@ -191,6 +185,17 @@ where
 {
     StorageError {
         kind: StorageErrorKind::AccessDenied,
+        detail: detail.to_owned(),
+        inner: error.map(|e| Box::new(e) as _),
+    }
+}
+
+pub fn access_expired<E>(detail: &str, error: Option<E>) -> StorageError
+where
+    E: 'static + error::Error + Send + Sync,
+{
+    StorageError {
+        kind: StorageErrorKind::AccessExpired,
         detail: detail.to_owned(),
         inner: error.map(|e| Box::new(e) as _),
     }

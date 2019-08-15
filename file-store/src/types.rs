@@ -13,9 +13,9 @@ use futures::executor::{block_on_stream, BlockingStream};
 use futures::stream::Stream;
 
 use super::filestore::FileStore;
-pub use error::{ObjectPathError, StorageError, StorageErrorKind, StorageResult, TransferError};
+pub use error::{StorageError, StorageErrorKind, StorageResult, TransferError};
 pub use future::WrappedFuture;
-pub use objects::{Object, ObjectType};
+pub use objects::{Object, ObjectReference, ObjectType};
 pub use path::ObjectPath;
 pub use stream::WrappedStream;
 

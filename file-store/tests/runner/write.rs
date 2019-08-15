@@ -15,9 +15,9 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote_current = ObjectPath::new(path)?;
+        let remote_current = context.get_path(path);
         let local_current = context.get_target(&remote_current);
-        let remote_target = ObjectPath::new(target)?;
+        let remote_target = context.get_path(target);
         let local_target = context.get_target(&remote_target);
 
         fs.copy_file(remote_current.clone(), remote_target.clone())
@@ -72,8 +72,8 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         path: &str,
         target: &str,
     ) -> TestResult<()> {
-        let remote_current = ObjectPath::new(path)?;
-        let remote_target = ObjectPath::new(target)?;
+        let remote_current = context.get_path(path);
+        let remote_target = context.get_path(target);
         let local_target = context.get_target(&remote_target);
 
         let result = fs
@@ -108,12 +108,36 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         Ok(())
     }
 
-    test_pass(fs, context, "mediumfile", "testfile", 58, 5 * MB).await?;
-    test_pass(fs, context, "largefile", "dir2/hop", 0, 100 * MB).await?;
-    test_pass(fs, context, "dir2/daz", "bazza", 72, 300).await?;
+    test_pass(
+        fs,
+        context,
+        "test1/dir1/mediumfile",
+        "test1/dir1/testfile",
+        58,
+        5 * MB,
+    )
+    .await?;
+    test_pass(
+        fs,
+        context,
+        "test1/dir1/largefile",
+        "test1/dir1/dir2/hop",
+        0,
+        100 * MB,
+    )
+    .await?;
+    test_pass(
+        fs,
+        context,
+        "test1/dir1/dir2/daz",
+        "test1/dir1/bazza",
+        72,
+        300,
+    )
+    .await?;
 
-    test_fail(fs, context, "dir2/gaz", "bazza").await?;
-    test_fail(fs, context, "fooish", "dir2/too").await?;
+    test_fail(fs, context, "test1/dir1/dir2/gaz", "test1/dir1/bazza").await?;
+    test_fail(fs, context, "test1/dir1/fooish", "test1/dir1/dir2/too").await?;
 
     Ok(())
 }
@@ -127,9 +151,9 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote_current = ObjectPath::new(path)?;
+        let remote_current = context.get_path(path);
         let local_current = context.get_target(&remote_current);
-        let remote_target = ObjectPath::new(target)?;
+        let remote_target = context.get_path(target);
         let local_target = context.get_target(&remote_target);
 
         fs.move_file(remote_current.clone(), remote_target.clone())
@@ -179,8 +203,8 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         path: &str,
         target: &str,
     ) -> TestResult<()> {
-        let remote_current = ObjectPath::new(path)?;
-        let remote_target = ObjectPath::new(target)?;
+        let remote_current = context.get_path(path);
+        let remote_target = context.get_path(target);
         let local_target = context.get_target(&remote_target);
 
         let result = fs
@@ -215,19 +239,43 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         Ok(())
     }
 
-    test_pass(fs, context, "mediumfile", "testfile", 58, 5 * MB).await?;
-    test_pass(fs, context, "largefile", "dir2/hop", 0, 100 * MB).await?;
-    test_pass(fs, context, "dir2/daz", "bazza", 72, 300).await?;
+    test_pass(
+        fs,
+        context,
+        "test1/dir1/mediumfile",
+        "test1/dir1/testfile",
+        58,
+        5 * MB,
+    )
+    .await?;
+    test_pass(
+        fs,
+        context,
+        "test1/dir1/largefile",
+        "test1/dir1/dir2/hop",
+        0,
+        100 * MB,
+    )
+    .await?;
+    test_pass(
+        fs,
+        context,
+        "test1/dir1/dir2/daz",
+        "test1/dir1/bazza",
+        72,
+        300,
+    )
+    .await?;
 
-    test_fail(fs, context, "dir2/gaz", "bazza").await?;
-    test_fail(fs, context, "fooish", "dir2/too").await?;
+    test_fail(fs, context, "test1/dir1/dir2/gaz", "test1/dir1/bazza").await?;
+    test_fail(fs, context, "test1/dir1/fooish", "test1/dir1/dir2/too").await?;
 
     Ok(())
 }
 
 pub async fn test_delete_object(fs: &FileStore, context: &TestContext) -> TestResult<()> {
     async fn test_pass(fs: &FileStore, context: &TestContext, path: &str) -> TestResult<()> {
-        let remote = ObjectPath::new(path)?;
+        let remote = context.get_path(path);
         let target = context.get_target(&remote);
 
         fs.delete_object(remote).await?;
@@ -250,7 +298,7 @@ pub async fn test_delete_object(fs: &FileStore, context: &TestContext) -> TestRe
     }
 
     async fn test_fail(fs: &FileStore, context: &TestContext, path: &str) -> TestResult<()> {
-        let fspath = ObjectPath::new(path)?;
+        let fspath = context.get_path(path);
         let target = context.get_target(&fspath);
 
         match fs.delete_object(fspath.clone()).await {
@@ -270,13 +318,13 @@ pub async fn test_delete_object(fs: &FileStore, context: &TestContext) -> TestRe
         Ok(())
     }
 
-    test_pass(fs, context, "largefile").await?;
-    test_pass(fs, context, "smallfile.txt").await?;
-    test_pass(fs, context, "dir2/daz").await?;
-    test_pass(fs, context, "maybedir").await?;
-    test_pass(fs, context, "dir2").await?;
+    test_pass(fs, context, "test1/dir1/largefile").await?;
+    test_pass(fs, context, "test1/dir1/smallfile.txt").await?;
+    test_pass(fs, context, "test1/dir1/dir2/daz").await?;
+    test_pass(fs, context, "test1/dir1/maybedir").await?;
+    test_pass(fs, context, "test1/dir1/dir2").await?;
 
-    test_fail(fs, context, "biz").await?;
+    test_fail(fs, context, "test1/dir1/biz").await?;
 
     Ok(())
 }
@@ -289,7 +337,7 @@ pub async fn test_write_file_from_stream(fs: &FileStore, context: &TestContext) 
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote = ObjectPath::new(path)?;
+        let remote = context.get_path(path);
         let target = context.get_target(&remote);
 
         fs.write_file_from_stream(
@@ -342,9 +390,9 @@ pub async fn test_write_file_from_stream(fs: &FileStore, context: &TestContext) 
         Ok(())
     }
 
-    test_write(fs, context, "foobar", 58, 300).await?;
-    test_write(fs, context, "maybedir", 27, 500).await?;
-    test_write(fs, context, "dir2/daz", 27, 100 * MB).await?;
+    test_write(fs, context, "test1/dir1/foobar", 58, 300).await?;
+    test_write(fs, context, "test1/dir1/maybedir", 27, 500).await?;
+    test_write(fs, context, "test1/dir1/dir2/daz", 27, 100 * MB).await?;
 
     Ok(())
 }

@@ -11,7 +11,7 @@
 //! [`delete_object`](../../struct.FileStore.html#method.delete_object) and
 //! [`write_file_from_stream`](../../struct.FileStore.html#method.write_file_from_stream)
 //! will remove these (in the directory case recursively).
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fs::Metadata;
 use std::io;
 use std::ops::Deref;
@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::BytesMut;
+use bytes::buf::FromBuf;
+use bytes::{BytesMut, IntoBuf};
 use futures::compat::*;
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{once, Stream, StreamExt, TryStreamExt};
@@ -28,7 +29,7 @@ use tokio_fs::{read_dir, remove_dir, remove_file, symlink_metadata, DirEntry, Fi
 use tokio_io::io::write_all;
 use tokio_io::AsyncRead as TokioAsyncRead;
 
-use super::{Backend, BackendImplementation, StorageImpl};
+use super::{Backend, BackendImplementation, ObjectInternals, StorageBackend};
 use crate::filestore::FileStore;
 use crate::types::error;
 use crate::types::stream::{MergedStreams, ResultStreamPoll};
@@ -73,6 +74,7 @@ fn get_object(path: ObjectPath, metadata: Option<Metadata>) -> Object {
     };
 
     Object {
+        internals: ObjectInternals::File,
         object_type,
         path,
         size,
@@ -288,7 +290,7 @@ impl FileBackend {
         ConnectFuture::from_future(async move {
             let metadata = wrap_future(
                 symlink_metadata(target.clone()).compat(),
-                ObjectPath::new("")?,
+                ObjectPath::empty(),
             )
             .await?;
             if !metadata.is_dir() {
@@ -322,20 +324,56 @@ impl TryFrom<FileStore> for FileBackend {
     }
 }
 
-impl StorageImpl for FileBackend {
+impl StorageBackend for FileBackend {
     fn backend_type(&self) -> Backend {
         Backend::File
     }
 
-    fn list_objects(&self, prefix: ObjectPath) -> ObjectStreamFuture {
+    fn list_objects<P>(&self, prefix: P) -> ObjectStreamFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
         async fn list(space: FileSpace, prefix: ObjectPath) -> StorageResult<ObjectStream> {
             Ok(ObjectStream::from_stream(FileLister::list(space, prefix)))
         }
 
-        ObjectStreamFuture::from_future(list(self.space.clone(), prefix))
+        let path = match prefix.try_into() {
+            Ok(p) => p,
+            Err(e) => return ObjectStreamFuture::from_value(Err(e.into())),
+        };
+
+        ObjectStreamFuture::from_future(list(self.space.clone(), path))
     }
 
-    fn get_object(&self, path: ObjectPath) -> ObjectFuture {
+    fn list_directory<P>(&self, dir: P) -> ObjectStreamFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
+        async fn list(space: FileSpace, directory: ObjectPath) -> StorageResult<ObjectStream> {
+            let _path = space.get_std_path(&directory)?;
+
+            unimplemented!();
+        }
+
+        let mut path = match dir.try_into() {
+            Ok(p) => p,
+            Err(e) => return ObjectStreamFuture::from_value(Err(e.into())),
+        };
+
+        if !path.is_empty() && path.is_dir_prefix() {
+            path.pop_part();
+        }
+
+        ObjectStreamFuture::from_future(list(self.space.clone(), path))
+    }
+
+    fn get_object<P>(&self, path: P) -> ObjectFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
         async fn get(space: FileSpace, path: ObjectPath) -> StorageResult<Object> {
             let target = space.get_std_path(&path)?;
 
@@ -351,10 +389,25 @@ impl StorageImpl for FileBackend {
             }
         }
 
+        let path = match path.try_into() {
+            Ok(p) => p,
+            Err(e) => return ObjectFuture::from_value(Err(e.into())),
+        };
+
+        if path.is_dir_prefix() {
+            return ObjectFuture::from_value(Err(error::invalid_path(
+                path,
+                "Object paths cannot be empty or end with a '/' character.",
+            )));
+        }
+
         ObjectFuture::from_future(get(self.space.clone(), path))
     }
 
-    fn get_file_stream(&self, path: ObjectPath) -> DataStreamFuture {
+    fn get_file_stream<O>(&self, reference: O) -> DataStreamFuture
+    where
+        O: ObjectReference,
+    {
         async fn read(space: FileSpace, path: ObjectPath) -> StorageResult<DataStream> {
             let target = space.get_std_path(&path)?;
 
@@ -368,10 +421,16 @@ impl StorageImpl for FileBackend {
             Ok(FileReadStream::build(path, file))
         }
 
-        DataStreamFuture::from_future(read(self.space.clone(), path))
+        match reference.into_path() {
+            Ok(p) => DataStreamFuture::from_future(read(self.space.clone(), p)),
+            Err(e) => DataStreamFuture::from_value(Err(e)),
+        }
     }
 
-    fn delete_object(&self, path: ObjectPath) -> OperationCompleteFuture {
+    fn delete_object<O>(&self, reference: O) -> OperationCompleteFuture
+    where
+        O: ObjectReference,
+    {
         async fn delete(space: FileSpace, path: ObjectPath) -> StorageResult<()> {
             let target = space.get_std_path(&path)?;
             let metadata =
@@ -384,18 +443,34 @@ impl StorageImpl for FileBackend {
             }
         }
 
-        OperationCompleteFuture::from_future(delete(self.space.clone(), path))
+        match reference.into_path() {
+            Ok(p) => OperationCompleteFuture::from_future(delete(self.space.clone(), p)),
+            Err(e) => OperationCompleteFuture::from_value(Err(e)),
+        }
     }
 
-    fn write_file_from_stream(&self, path: ObjectPath, stream: DataStream) -> WriteCompleteFuture {
-        async fn write(
+    fn write_file_from_stream<S, I, E, P>(&self, path: P, stream: S) -> WriteCompleteFuture
+    where
+        S: Stream<Item = Result<I, E>> + Send + 'static,
+        I: IntoBuf + 'static,
+        E: 'static + std::error::Error + Send + Sync,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
+        async fn write<S, I, E>(
             space: FileSpace,
             path: ObjectPath,
-            mut stream: DataStream,
-        ) -> Result<(), TransferError> {
+            stream: S,
+        ) -> Result<(), TransferError>
+        where
+            S: Stream<Item = Result<I, E>> + Send + 'static,
+            I: IntoBuf + 'static,
+            E: 'static + std::error::Error + Send + Sync,
+        {
             let target = space
                 .get_std_path(&path)
                 .map_err(TransferError::TargetError)?;
+
             match symlink_metadata(target.clone()).compat().await {
                 Ok(m) => {
                     if m.is_dir() {
@@ -418,8 +493,14 @@ impl StorageImpl for FileBackend {
             let mut file = wrap_future(File::create(target).compat(), path.clone())
                 .await
                 .map_err(TransferError::TargetError)?;
+
+            let mut mapped = Box::pin(stream.map(|r| match r {
+                Ok(b) => Ok(Data::from_buf(b)),
+                Err(e) => Err(error::other_error(&e.to_string(), Some(e))),
+            }));
+
             loop {
-                let option = stream.next().await;
+                let option = mapped.next().await;
                 if let Some(result) = option {
                     let data = result.map_err(TransferError::SourceError)?;
                     file = match write_all(file, data).compat().await {
@@ -436,6 +517,13 @@ impl StorageImpl for FileBackend {
 
             Ok(())
         }
+
+        let path = match path.try_into() {
+            Ok(t) => t,
+            Err(e) => {
+                return WriteCompleteFuture::from_value(Err(TransferError::TargetError(e.into())))
+            }
+        };
 
         WriteCompleteFuture::from_future(write(self.space.clone(), path, stream))
     }

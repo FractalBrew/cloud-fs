@@ -9,6 +9,7 @@ use yaml_rust::{Yaml, YamlLoader};
 use file_store::backends::b2::B2Backend;
 use file_store::backends::file::FileBackend;
 use file_store::executor::run;
+use file_store::ObjectPath;
 
 use commands::*;
 
@@ -66,17 +67,24 @@ fn main() {
         ("b2", Some(backend_args)) => {
             let key_id = backend_args.value_of("key-id").unwrap();
             let key = backend_args.value_of("key").unwrap();
-            (B2Backend::connect(key_id, key), backend_args)
+            let mut builder = B2Backend::builder(key_id, key);
+            if let Some(prefix) = backend_args.value_of("prefix") {
+                let path = ObjectPath::new(prefix).unwrap();
+                builder = builder.prefix(path);
+            }
+            (builder.connect(), backend_args)
         }
         _ => {
-            panic!("Command line parsing failed.");
+            println!("You must choose a storage backend.\n{}", app_args.usage());
+            return;
         }
     };
 
     let future = match backend_args.subcommand() {
         ("ls", Some(args)) => ls(fsfuture, args),
         _ => {
-            panic!("Command line parsing failed.");
+            println!("You must choose a command.\n{}", app_args.usage());
+            return;
         }
     };
 

@@ -9,9 +9,13 @@ pub mod b2;
 #[cfg(feature = "file")]
 pub mod file;
 
+use std::convert::TryInto;
+use std::error::Error;
 use std::fmt;
 
+use bytes::IntoBuf;
 use futures::future::TryFutureExt;
+use futures::stream::Stream;
 
 use crate::types::*;
 
@@ -21,7 +25,7 @@ pub enum Backend {
     #[cfg(feature = "file")]
     /// The [file backend](file/index.html). Included with the "file" feature.
     File,
-    #[cfg(feature = "file")]
+    #[cfg(feature = "b2")]
     /// The [b2 backend](b2/index.html). Included with the "b2" feature.
     B2,
 }
@@ -33,6 +37,25 @@ impl fmt::Display for Backend {
             Backend::File => f.pad("file"),
             #[cfg(feature = "b2")]
             Backend::B2 => f.pad("b2"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ObjectInternals {
+    #[cfg(feature = "file")]
+    File,
+    #[cfg(feature = "b2")]
+    B2,
+}
+
+impl ObjectInternals {
+    pub(crate) fn is_from_backend(&self, backend: Backend) -> bool {
+        match self {
+            #[cfg(feature = "file")]
+            ObjectInternals::File => backend == Backend::File,
+            #[cfg(feature = "b2")]
+            ObjectInternals::B2 => backend == Backend::B2,
         }
     }
 }
@@ -68,53 +91,72 @@ pub(crate) enum BackendImplementation {
 }
 
 /// The trait that every storage backend must implement at a minimum.
-pub(crate) trait StorageImpl: Clone + Send + 'static {
-    /// Returns the type of backend.
+pub trait StorageBackend: Clone + Send + 'static {
+    /// See [`backend_type`](../../struct.FileStore.html#method.backend_type).
     fn backend_type(&self) -> Backend;
 
-    /// Lists the objects that start with the given prefix.
-    ///
-    /// See [`FileStore.list_objects`](../struct.FileStore.html#method.list_objects).
-    fn list_objects(&self, prefix: ObjectPath) -> ObjectStreamFuture;
+    /// See [`list_objects`](../../struct.FileStore.html#method.list_objects).
+    fn list_objects<P>(&self, prefix: P) -> ObjectStreamFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>;
 
-    /// Gets info about the object at the given path.
-    ///
-    /// See [`FileStore.get_object`](../struct.FileStore.html#method.get_object).
-    fn get_object(&self, path: ObjectPath) -> ObjectFuture;
+    /// See [`list_directory`](../../struct.FileStore.html#method.list_directory).
+    fn list_directory<P>(&self, dir: P) -> ObjectStreamFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>;
 
-    /// Gets a stream of data for the file at the given path. Fails if the path
-    /// does not point to a file.
-    ///
-    /// See [`FileStore.get_file_stream`](../struct.FileStore.html#method.get_file_stream).
-    fn get_file_stream(&self, path: ObjectPath) -> DataStreamFuture;
+    /// See [`get_object`](../../struct.FileStore.html#method.get_object).
+    fn get_object<P>(&self, path: P) -> ObjectFuture
+    where
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>;
 
-    /// Copies a file to a new path.
-    ///
-    /// See [`FileStore.copy_file`](../struct.FileStore.html#method.copy_file).
-    fn copy_file(&self, path: ObjectPath, target: ObjectPath) -> CopyCompleteFuture {
-        let source = DataStream::from_stream(self.get_file_stream(path).try_flatten_stream());
+    /// See [`get_file_stream`](../../struct.FileStore.html#method.get_file_stream).
+    fn get_file_stream<O>(&self, reference: O) -> DataStreamFuture
+    where
+        O: ObjectReference;
+
+    /// See [`copy_file`](../../struct.FileStore.html#method.copy_file).
+    fn copy_file<O, P>(&self, reference: O, target: P) -> CopyCompleteFuture
+    where
+        O: ObjectReference,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
+        let source = DataStream::from_stream(self.get_file_stream(reference).try_flatten_stream());
         self.write_file_from_stream(target, source)
     }
 
-    /// Moves a file to a new path.
-    ///
-    /// See [`FileStore.move_file`](../struct.FileStore.html#method.move_file).
-    fn move_file(&self, path: ObjectPath, target: ObjectPath) -> MoveCompleteFuture {
+    /// See [`move_file`](../../struct.FileStore.html#method.move_file).
+    fn move_file<O, P>(&self, reference: O, target: P) -> MoveCompleteFuture
+    where
+        O: ObjectReference,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
+    {
         let deleter = self.clone();
-        MoveCompleteFuture::from_future(self.copy_file(path.clone(), target).and_then(move |()| {
-            deleter
-                .delete_object(path)
-                .map_err(TransferError::SourceError)
-        }))
+        MoveCompleteFuture::from_future(self.copy_file(reference.clone(), target).and_then(
+            move |()| {
+                deleter
+                    .delete_object(reference)
+                    .map_err(TransferError::SourceError)
+            },
+        ))
     }
 
-    /// Deletes the object at the given path.
-    ///
-    /// See [`FileStore.delete_object`](../struct.FileStore.html#method.delete_object).
-    fn delete_object(&self, path: ObjectPath) -> OperationCompleteFuture;
+    /// See [`delete_object`](../../struct.FileStore.html#method.delete_object).
+    fn delete_object<O>(&self, reference: O) -> OperationCompleteFuture
+    where
+        O: ObjectReference;
 
-    /// Writes a stream of data into the file at the given path.
-    ///
-    /// See [`FileStore.write_file_from_stream`](../struct.FileStore.html#method.write_file_from_stream).
-    fn write_file_from_stream(&self, path: ObjectPath, stream: DataStream) -> WriteCompleteFuture;
+    /// See [`write_file_from_stream`](../../struct.FileStore.html#method.write_file_from_stream).
+    fn write_file_from_stream<S, I, E, P>(&self, path: P, stream: S) -> WriteCompleteFuture
+    where
+        S: Stream<Item = Result<I, E>> + Send + 'static,
+        I: IntoBuf + 'static,
+        E: 'static + Error + Send + Sync,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>;
 }

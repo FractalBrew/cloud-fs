@@ -14,7 +14,7 @@ pub fn ls(
         async move {
             let prefix = match prefix_arg {
                 Some(p) => ObjectPath::new(p)?,
-                None => ObjectPath::new("")?,
+                None => ObjectPath::empty(),
             };
 
             let stream = fs.list_objects(prefix).await?;

@@ -20,7 +20,6 @@ pub type TestResult<I> = Result<I, TestError>;
 #[derive(Debug)]
 pub enum TestError {
     UnexpectedStorageError(StorageError),
-    UnexpectedPathError(ObjectPathError),
     UnexpectedTransferError(TransferError),
     HarnessFailure(String),
     TestFailure(String),
@@ -39,21 +38,14 @@ impl fmt::Display for TestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             TestError::UnexpectedStorageError(error) => {
-                f.write_fmt(format_args!("Unexpected storage error thrown: {}", error))
-            }
-            TestError::UnexpectedPathError(error) => {
-                f.write_fmt(format_args!("Unexpected path error thrown: {}", error))
+                write!(f, "Unexpected storage error thrown: {}", error)
             }
             TestError::UnexpectedTransferError(error) => match error {
-                TransferError::SourceError(e) => {
-                    f.write_fmt(format_args!("Unexpected source error thrown: {}", e))
-                }
-                TransferError::TargetError(e) => {
-                    f.write_fmt(format_args!("Unexpected target error thrown: {}", e))
-                }
+                TransferError::SourceError(e) => write!(f, "Unexpected source error thrown: {}", e),
+                TransferError::TargetError(e) => write!(f, "Unexpected target error thrown: {}", e),
             },
-            TestError::HarnessFailure(message) => f.write_str(message),
-            TestError::TestFailure(message) => f.write_str(message),
+            TestError::HarnessFailure(message) => f.pad(message),
+            TestError::TestFailure(message) => f.pad(message),
         }
     }
 }
@@ -61,12 +53,6 @@ impl fmt::Display for TestError {
 impl From<StorageError> for TestError {
     fn from(error: StorageError) -> TestError {
         TestError::UnexpectedStorageError(error)
-    }
-}
-
-impl From<ObjectPathError> for TestError {
-    fn from(error: ObjectPathError) -> TestError {
-        TestError::UnexpectedPathError(error)
     }
 }
 
@@ -92,62 +78,57 @@ where
 pub struct TestContext {
     _temp: TempDir,
     root: PathBuf,
+    fs_root: String,
 }
 
 impl TestContext {
+    pub fn contains(&self, path: &str) -> bool {
+        path != self.fs_root && path.starts_with(&self.fs_root)
+    }
+
+    pub fn get_path(&self, path: &str) -> ObjectPath {
+        if !path.starts_with(&self.fs_root) {
+            panic!(
+                "Cannot get a path for {} with a root of {}",
+                path, self.fs_root
+            );
+        }
+
+        let mut target = &path[self.fs_root.len()..];
+        if target.starts_with('/') {
+            target = &target[1..]
+        }
+        ObjectPath::new(target).unwrap()
+    }
+
     pub fn get_target(&self, path: &ObjectPath) -> PathBuf {
-        let mut target = self.get_root();
+        let mut target = self.root.join(&self.fs_root);
         for part in path.parts() {
             target.push(part);
         }
         target
     }
 
-    pub fn get_root(&self) -> PathBuf {
-        self.root.clone()
+    pub fn get_fs_root(&self) -> PathBuf {
+        self.root.join(&self.fs_root)
     }
 }
 
 /// Creates a filesystem used for testing.
-///
-/// The filesystem looks like this:
-///
-/// ```
-/// test1/dir1/smallfile.txt
-/// test1/dir1/largefile
-/// test1/dir1/mediumfile
-/// test1/dir2/foo
-/// test1/dir2/bar
-/// test1/dir2/0foo
-/// test1/dir2/5diz
-/// test1/dir2/1bar
-/// test1/dir2/daz
-/// test1/dir2/hop
-/// test1/dir2/yu
-///
-/// For File backend only:
-///
-/// test1/dir3/
-///
-/// Created by write tests:
-///
-/// test1/foobar
-/// test1/dir3
-/// test1/dir2/daz
-///
-/// ```
-pub fn prepare_test(backend: Backend) -> TestResult<TestContext> {
+pub fn prepare_test(backend: Backend, test_root: &str) -> TestResult<TestContext> {
     let temp = tempdir().into_test_result()?;
 
     let mut dir = PathBuf::from(temp.path());
-    dir.push("test1");
-    dir.push("dir1");
-    create_dir_all(dir.clone()).into_test_result()?;
 
     let context = TestContext {
         _temp: temp,
         root: dir.clone(),
+        fs_root: test_root.to_owned(),
     };
+
+    dir.push("test1");
+    dir.push("dir1");
+    create_dir_all(dir.clone()).into_test_result()?;
 
     write_file(
         &dir,
@@ -188,12 +169,12 @@ pub fn prepare_test(backend: Backend) -> TestResult<TestContext> {
 }
 
 macro_rules! make_test {
-    ($backend:expr, $pkg:ident, $name:ident, $setup:expr, $cleanup:expr) => {
+    ($root:expr, $backend:expr, $pkg:ident, $name:ident, $setup:expr, $cleanup:expr) => {
         #[test]
         fn $name() {
             let result: Result<crate::runner::TestResult<()>, std::sync::mpsc::TryRecvError> =
                 file_store::executor::run(async {
-                    let test_context = crate::runner::prepare_test($backend)?;
+                    let test_context = crate::runner::prepare_test($backend, $root)?;
                     let (fs, backend_context) = $setup(&test_context).await?;
                     crate::runner::$pkg::$name(&fs, &test_context).await?;
                     $cleanup(backend_context).await?;
@@ -202,7 +183,7 @@ macro_rules! make_test {
 
             match result {
                 Ok(Ok(())) => (),
-                Ok(Err(error)) => panic!("{}", error),
+                Ok(Err(error)) => panic!(error.to_string()),
                 Err(_e) => panic!("Failed to receive test result."),
             }
         }
@@ -210,14 +191,22 @@ macro_rules! make_test {
 }
 
 macro_rules! build_tests {
-    ($backend:expr, $setup:expr, $cleanup:expr) => {
-        make_test!($backend, read, test_list_objects, $setup, $cleanup);
-        make_test!($backend, read, test_get_object, $setup, $cleanup);
-        make_test!($backend, read, test_get_file_stream, $setup, $cleanup);
-        make_test!($backend, write, test_copy_file, $setup, $cleanup);
-        make_test!($backend, write, test_move_file, $setup, $cleanup);
-        make_test!($backend, write, test_delete_object, $setup, $cleanup);
+    ($root:expr, $backend:expr, $setup:expr, $cleanup:expr) => {
+        make_test!($root, $backend, read, test_list_objects, $setup, $cleanup);
+        make_test!($root, $backend, read, test_get_object, $setup, $cleanup);
         make_test!(
+            $root,
+            $backend,
+            read,
+            test_get_file_stream,
+            $setup,
+            $cleanup
+        );
+        make_test!($root, $backend, write, test_copy_file, $setup, $cleanup);
+        make_test!($root, $backend, write, test_move_file, $setup, $cleanup);
+        make_test!($root, $backend, write, test_delete_object, $setup, $cleanup);
+        make_test!(
+            $root,
             $backend,
             write,
             test_write_file_from_stream,
