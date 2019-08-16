@@ -38,15 +38,16 @@ use std::task::{Context, Poll};
 use base64::encode;
 use bytes::IntoBuf;
 use futures::compat::*;
-use futures::future::ready;
+use futures::future::{ready, TryFutureExt};
 use futures::lock::Mutex;
-use futures::stream::{Stream, TryStreamExt};
+use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::method::Method;
 use hyper::body::Body;
 use hyper::client::connect::HttpConnector;
 use hyper::client::Client as HyperClient;
-use hyper::Request;
+use hyper::{Request, Response};
 use hyper_tls::HttpsConnector;
+use serde::de::DeserializeOwned;
 use serde_json::{from_str, to_string};
 
 use storage_types::b2::v2::requests::*;
@@ -153,33 +154,50 @@ impl B2Client {
         Ok(session.account_id)
     }
 
-    async fn request<R>(
+    async fn request(
+        &self,
+        method: &str,
+        path: ObjectPath,
+        request: Request<Body>,
+    ) -> StorageResult<Response<Body>> {
+        let response = self.client.request(request).compat().await?;
+
+        if response.status().is_success() {
+            Ok(response)
+        } else {
+            let (_, body) = response.into_parts();
+
+            let mut data: String = String::new();
+            BlockingStreamReader::from_stream(body.compat())
+                .read_to_string(&mut data)
+                .unwrap();
+            Err(generate_error(method, &path, &data))
+        }
+    }
+
+    async fn basic_request<R>(
         &self,
         method: &str,
         path: ObjectPath,
         request: Request<Body>,
     ) -> StorageResult<R>
     where
-        for<'de> R: serde::de::Deserialize<'de>,
+        R: DeserializeOwned,
     {
-        let response = self.client.request(request).compat().await?;
-        let (meta, body) = response.into_parts();
+        let response = self.request(method, path, request).await?;
+        let (_, body) = response.into_parts();
 
         let mut data: String = String::new();
         BlockingStreamReader::from_stream(body.compat())
             .read_to_string(&mut data)
             .unwrap();
 
-        if meta.status.is_success() {
-            match from_str(&data) {
-                Ok(r) => Ok(r),
-                Err(e) => Err(error::invalid_data(
-                    &format!("Unable to parse response from {}.", method),
-                    Some(e),
-                )),
-            }
-        } else {
-            Err(generate_error(method, &path, &data))
+        match from_str(&data) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(error::invalid_data(
+                &format!("Unable to parse response from {}.", method),
+                Some(e),
+            )),
         }
     }
 
@@ -196,7 +214,8 @@ impl B2Client {
             .body(Body::empty())?;
 
         let empty = ObjectPath::empty();
-        self.request("b2_authorize_account", empty, request).await
+        self.basic_request("b2_authorize_account", empty, request)
+            .await
     }
 
     async fn b2_api_call<S, Q>(self, method: &str, path: ObjectPath, request: S) -> StorageResult<Q>
@@ -219,8 +238,53 @@ impl B2Client {
                 .header("Authorization", &authorization)
                 .body(data.into())?;
 
-            match self.request(method, path.clone(), request).await {
+            match self.basic_request(method, path.clone(), request).await {
                 Ok(response) => return Ok(response),
+                Err(e) => {
+                    if e.kind() == error::StorageErrorKind::AccessExpired {
+                        self.reset_session(&authorization).await;
+
+                        tries += 1;
+                        if tries < API_RETRIES {
+                            continue;
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    async fn b2_download_file_by_name(
+        self,
+        path: ObjectPath,
+        bucket: String,
+        file: String,
+    ) -> StorageResult<Body> {
+        let mut tries: usize = 0;
+        loop {
+            let (download_url, authorization) = {
+                let session = self.session().await?;
+                (
+                    session.download_url.clone(),
+                    session.authorization_token.clone(),
+                )
+            };
+
+            let request = Request::builder()
+                .method(Method::GET)
+                .uri(format!("{}/file/{}/{}", download_url, bucket, file))
+                .header("Authorization", &authorization)
+                .body(Body::empty())?;
+
+            match self
+                .request("b2_download_file_by_name", path.clone(), request)
+                .await
+            {
+                Ok(response) => {
+                    let (_, body) = response.into_parts();
+                    return Ok(body);
+                }
                 Err(e) => {
                     if e.kind() == error::StorageErrorKind::AccessExpired {
                         self.reset_session(&authorization).await;
@@ -270,73 +334,107 @@ impl B2Client {
     }
 }
 
-/// A stream of objects from B2.
-struct ListFileNamesStream {
-    client: B2Client,
-    options: ListFileNamesRequest,
-    path: ObjectPath,
-    results: Vec<FileInfo>,
-    future: Option<
-        Pin<Box<dyn Future<Output = StorageResult<ListFileNamesResponse>> + Send + 'static>>,
-    >,
+trait ListRequestor<S>
+where
+    S: Send + 'static,
+{
+    fn next_request(&self) -> Option<WrappedFuture<StorageResult<S>>>;
+    fn take_response(&mut self, response: S) -> Vec<FileInfo>;
 }
 
-impl ListFileNamesStream {
+struct FileNamesRequestor {
+    client: B2Client,
+    path: ObjectPath,
+    options: Option<ListFileNamesRequest>,
+}
+
+impl FileNamesRequestor {
     fn new(
-        path: ObjectPath,
         client: B2Client,
+        path: ObjectPath,
         options: ListFileNamesRequest,
-    ) -> ListFileNamesStream {
-        let list_client = client.clone();
-        ListFileNamesStream {
-            future: Some(Box::pin(
-                list_client.b2_list_file_names(path.clone(), options.clone()),
-            )),
-            path,
+    ) -> FileNamesRequestor {
+        FileNamesRequestor {
             client,
-            options,
-            results: Vec::new(),
+            path,
+            options: Some(options),
         }
     }
 }
 
-impl Stream for ListFileNamesStream {
+impl ListRequestor<ListFileNamesResponse> for FileNamesRequestor {
+    fn next_request(&self) -> Option<WrappedFuture<StorageResult<ListFileNamesResponse>>> {
+        self.options.as_ref().map(|o| {
+            WrappedFuture::<StorageResult<ListFileNamesResponse>>::from_future(
+                self.client.b2_list_file_names(self.path.clone(), o.clone()),
+            )
+        })
+    }
+
+    fn take_response(&mut self, response: ListFileNamesResponse) -> Vec<FileInfo> {
+        if response.next_file_name.is_none() {
+            self.options = None;
+        } else if let Some(ref mut options) = self.options {
+            options.start_file_name = response.next_file_name;
+        }
+
+        response.files
+    }
+}
+
+/// A stream of objects from B2.
+struct ListStream<R, S>
+where
+    R: ListRequestor<S> + Unpin + Send + 'static,
+    S: Send + 'static,
+{
+    results: Vec<FileInfo>,
+    requestor: R,
+    future: Option<Pin<Box<WrappedFuture<StorageResult<S>>>>>,
+}
+
+impl<R, S> ListStream<R, S>
+where
+    R: ListRequestor<S> + Send + Unpin + 'static,
+    S: Send + 'static,
+{
+    fn new(requestor: R) -> ListStream<R, S> {
+        ListStream {
+            requestor,
+            results: Vec::new(),
+            future: None,
+        }
+    }
+}
+
+impl<R, S> Stream for ListStream<R, S>
+where
+    R: ListRequestor<S> + Send + Unpin + 'static,
+    S: Send + 'static,
+{
     type Item = StorageResult<FileInfo>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<FileInfo> {
-        if let Some(ref mut f) = self.future {
-            match f.as_mut().poll(cx) {
-                Poll::Pending => (),
-                Poll::Ready(Ok(result)) => {
-                    self.results.extend(result.files);
-                    match result.next_file_name {
-                        Some(fname) => {
-                            let mut next = self.options.clone();
-                            next.start_file_name = Some(fname);
-                            self.future = Some(Box::pin(
-                                self.client.b2_list_file_names(self.path.clone(), next),
-                            ));
-                        }
-                        None => {
-                            self.future = None;
-                        }
+        loop {
+            if !self.results.is_empty() {
+                return Poll::Ready(Some(Ok(self.results.remove(0))));
+            } else if let Some(ref mut fut) = self.future {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(Ok(response)) => {
+                        self.future = None;
+                        self.results = self.requestor.take_response(response);
                     }
+                    Poll::Ready(Err(e)) => {
+                        self.future = None;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Pending => return Poll::Pending,
                 }
-                Poll::Ready(Err(e)) => {
-                    self.future = None;
-                    return Poll::Ready(Some(Err(e)));
-                }
+            } else if let Some(fut) = self.requestor.next_request() {
+                self.future = Some(Box::pin(fut));
+            } else {
+                return Poll::Ready(None);
             }
-        }
-
-        if !self.results.is_empty() {
-            return Poll::Ready(Some(Ok(self.results.remove(0))));
-        }
-
-        if self.results.is_empty() && self.future.is_none() {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
         }
     }
 }
@@ -496,7 +594,7 @@ impl StorageBackend for B2Backend {
                 .drain(..)
                 .filter(|b| b.bucket_name.starts_with(&bucket))
                 .map(move |b| {
-                    let request = ListFileNamesRequest {
+                    let options = ListFileNamesRequest {
                         bucket_id: b.bucket_id.clone(),
                         start_file_name: None,
                         max_file_count: None,
@@ -504,8 +602,10 @@ impl StorageBackend for B2Backend {
                         delimiter: None,
                     };
 
+                    let requestor =
+                        FileNamesRequestor::new(client.clone(), prefix.clone(), options);
                     let temp_prefix = backend_prefix.clone();
-                    ListFileNamesStream::new(prefix.clone(), client.clone(), request)
+                    ListStream::new(requestor)
                         .and_then(move |f| ready(new_object(&b.bucket_name, &f, &temp_prefix)))
                 })
                 .fold(MergedStreams::new(), |mut m, s| {
@@ -546,6 +646,57 @@ impl StorageBackend for B2Backend {
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>,
     {
+        async fn get(
+            client: B2Client,
+            backend_prefix: ObjectPath,
+            path: ObjectPath,
+        ) -> StorageResult<Object> {
+            let mut file_part = backend_prefix.join(&path);
+            let bucket = match file_part.unshift_part() {
+                Some(b) => b,
+                None => return Err(error::not_found::<StorageError>(path, None)),
+            };
+
+            if file_part.is_empty() {
+                return Err(error::not_found::<StorageError>(path, None));
+            }
+
+            let request = ListBucketsRequest {
+                account_id: client.account_id().await?,
+                bucket_id: None,
+                bucket_name: Some(bucket),
+                bucket_types: Default::default(),
+            };
+
+            let mut buckets = client.b2_list_buckets(path.clone(), request).await?.buckets;
+            if buckets.len() != 1 {
+                return Err(error::not_found::<StorageError>(path, None));
+            }
+
+            let bucket = buckets.remove(0);
+
+            let file = file_part.to_string();
+
+            let options = ListFileNamesRequest {
+                bucket_id: bucket.bucket_id.clone(),
+                start_file_name: None,
+                max_file_count: None,
+                prefix: Some(file.clone()),
+                delimiter: Some(String::from("/")),
+            };
+
+            let requestor = FileNamesRequestor::new(client.clone(), path.clone(), options);
+            let files: Vec<FileInfo> = ListStream::new(requestor)
+                .try_filter(|info| ready(info.file_name == file))
+                .try_collect()
+                .await?;
+            if files.len() != 1 {
+                return Err(error::not_found::<StorageError>(path, None));
+            }
+
+            new_object(&bucket.bucket_name, &files[0], &backend_prefix)
+        }
+
         let path = match path.try_into() {
             Ok(p) => p,
             Err(e) => return ObjectFuture::from_value(Err(e.into())),
@@ -558,14 +709,48 @@ impl StorageBackend for B2Backend {
             )));
         }
 
-        unimplemented!();
+        ObjectFuture::from_future(get(self.client(), self.settings.prefix.clone(), path))
     }
 
-    fn get_file_stream<O>(&self, _reference: O) -> DataStreamFuture
+    fn get_file_stream<O>(&self, reference: O) -> DataStreamFuture
     where
         O: ObjectReference,
     {
-        unimplemented!();
+        let mut path = match reference.into_path() {
+            Ok(p) => p,
+            Err(e) => return DataStreamFuture::from_value(Err(e)),
+        };
+
+        if path.is_dir_prefix() {
+            return DataStreamFuture::from_value(Err(error::invalid_path(
+                path,
+                "Object paths cannot be empty or end with a '/' character.",
+            )));
+        }
+
+        let requested = path.clone();
+        let bucket = match path.unshift_part() {
+            Some(b) => b,
+            _ => {
+                return DataStreamFuture::from_value(Err(error::invalid_path(
+                    path,
+                    "Object paths cannot be empty or end with a '/' character.",
+                )));
+            }
+        };
+
+        let file = path.to_string();
+        let future = self
+            .client()
+            .b2_download_file_by_name(requested, bucket, file)
+            .map_ok(|body| {
+                DataStream::from_stream(body.compat().map(|result| match result {
+                    Ok(chunk) => Result::<Data, StorageError>::Ok(chunk.into_bytes()),
+                    Err(e) => Result::<Data, StorageError>::Err(e.into()),
+                }))
+            });
+
+        DataStreamFuture::from_future(future)
     }
 
     fn delete_object<O>(&self, _reference: O) -> OperationCompleteFuture
@@ -617,6 +802,7 @@ fn generate_error(method: &str, path: &ObjectPath, response: &str) -> StorageErr
             error::access_expired::<StorageError>("The authentication token has expired.", None)
         }
         (_, 401, "unsupported") => error::internal_error::<StorageError>(&error.message, None),
+        (_, 404, "not_found") => error::not_found::<StorageError>(path.clone(), None),
         (_, 503, "bad_request") => error::connection_failed::<StorageError>(&error.message, None),
         _ => error::other_error::<StorageError>(
             &format!(

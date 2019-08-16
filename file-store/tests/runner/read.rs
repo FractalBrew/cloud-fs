@@ -187,7 +187,7 @@ pub async fn test_get_object(fs: &FileStore, context: &TestContext) -> TestResul
         test_pass(fs, context, "test1/dir1/maybedir", ObjectType::Directory, 0).await?;
     } else {
         test_fail(fs, context, "test1/dir1/dir2").await?;
-        test_fail(fs, context, "test1/dir1/maybedir").await?;
+        test_pass(fs, context, "test1/dir1/maybedir", ObjectType::File, 0).await?;
     }
 
     Ok(())

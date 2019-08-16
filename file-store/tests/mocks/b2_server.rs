@@ -3,8 +3,9 @@
 use std::cmp::Ord;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt;
 use std::fmt::Display;
-use std::fs::{metadata, read_dir, DirEntry};
+use std::fs::{metadata, read, read_dir, DirEntry};
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
@@ -17,13 +18,13 @@ use futures::channel::oneshot::{channel, Sender};
 use futures::compat::*;
 use futures::future::{ready, TryFutureExt};
 use futures::lock::Mutex;
-use futures::stream::TryStreamExt;
+use futures::stream::{iter, TryStreamExt};
 use http::header;
 use http::request::Parts;
 use http::StatusCode;
 use hyper::server::Server;
 use hyper::service::service_fn;
-use hyper::{Body, Request, Response};
+use hyper::{Body, Chunk, Request, Response};
 use serde_json::{from_slice, to_string_pretty};
 use uuid::Uuid;
 
@@ -39,11 +40,13 @@ const TEST_ACCOUNT_ID: &str = "foobarbaz";
 
 /// How many uses can an auth token see before it expires?
 const AUTH_TIMEOUT: usize = 2;
-const DEFAULT_FILE_COUNT: usize = 2000;
+const DEFAULT_FILE_COUNT: usize = 2;
 const BUCKET_ID_PREFIX: &str = "bkt_";
+const FILE_ID_PREFIX: &str = "id_";
 
 type B2Result = Result<Response<Body>, B2Error>;
 
+#[derive(Debug)]
 struct B2Error {
     status: StatusCode,
     code: String,
@@ -105,6 +108,12 @@ impl B2Error {
         D: Display,
     {
         B2Error::new(StatusCode::BAD_REQUEST, "bad_request", message)
+    }
+}
+
+impl Display for B2Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad(&format!("{:?}", self))
     }
 }
 
@@ -265,7 +274,7 @@ impl FileLister {
                         }
                     } else if file_path.starts_with(&self.prefix) {
                         if let Some(delimiter) = &self.delimiter {
-                            let suffix = file_path[0..self.prefix.len()].to_owned();
+                            let suffix = file_path[self.prefix.len()..].to_owned();
                             if let Some(pos) = suffix.find(delimiter.as_str()) {
                                 let len = self.prefix.len() + pos + delimiter.len();
                                 let file_path = file_path[0..len].to_owned();
@@ -292,7 +301,7 @@ impl FileLister {
                             content_length: meta.len(),
                             content_sha1: None,
                             content_type: None,
-                            file_id: Some(file_path.clone()),
+                            file_id: Some(format!("{}{}", FILE_ID_PREFIX, file_path)),
                             file_info: Default::default(),
                             file_name: file_path,
                             upload_timestamp: 0,
@@ -535,7 +544,7 @@ impl B2Server {
                     Err(B2Error::new(
                         StatusCode::UNAUTHORIZED,
                         "expired_auth_token",
-                        "Auth token as expired.",
+                        "Auth token has expired.",
                     ))
                 }
             }
@@ -589,8 +598,39 @@ impl B2Server {
             api_method!(b2_list_file_names, self, method, head, data);
 
             Err(B2Error::invalid_parameters("Invalid API method requested."))
+        } else if path.starts_with("/download/file/") {
+            self.check_auth(&auth).await?;
+
+            let path = &path[15..];
+            let mut file = self.root.clone();
+            file.push(path);
+
+            let meta = metadata(&file).into_path_err(&file)?;
+            if !meta.is_file() {
+                return Err(B2Error::not_found(&file));
+            }
+
+            let source = read(&file).into_path_err(file)?;
+            let mut len = source.len() / 5;
+            if len == 0 {
+                len = 1;
+            }
+
+            let blocks: Vec<io::Result<Chunk>> = source
+                .chunks(len)
+                .map(|s| {
+                    let mut result: Vec<u8> = Default::default();
+                    result.extend_from_slice(s);
+                    io::Result::<Chunk>::Ok(result.into())
+                })
+                .collect();
+
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::wrap_stream(Compat::new(iter(blocks))))
+                .expect("Failed to build response."))
         } else {
-            Err(B2Error::invalid_parameters("IInvalid path requested."))
+            Err(B2Error::invalid_parameters("Invalid path requested."))
         }
     }
 }
