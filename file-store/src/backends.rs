@@ -41,21 +41,21 @@ impl fmt::Display for Backend {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ObjectInternals {
     #[cfg(feature = "file")]
     File,
     #[cfg(feature = "b2")]
-    B2,
+    B2(b2::B2ObjectInternals),
 }
 
 impl ObjectInternals {
-    pub(crate) fn is_from_backend(&self, backend: Backend) -> bool {
+    pub(crate) fn from_backend(&self) -> Backend {
         match self {
             #[cfg(feature = "file")]
-            ObjectInternals::File => backend == Backend::File,
+            ObjectInternals::File => Backend::File,
             #[cfg(feature = "b2")]
-            ObjectInternals::B2 => backend == Backend::B2,
+            ObjectInternals::B2(_) => Backend::B2,
         }
     }
 }

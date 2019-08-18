@@ -92,8 +92,33 @@ impl From<serde_json::error::Error> for StorageError {
     }
 }
 
-fn new_object(bucket: &str, info: &FileInfo, prefix: &ObjectPath) -> StorageResult<Object> {
-    let mut path = ObjectPath::new(&info.file_name)?;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct B2ObjectInternals {
+    infos: Vec<FileInfo>,
+}
+
+impl B2ObjectInternals {
+    fn new(mut infos: Vec<FileInfo>) -> B2ObjectInternals {
+        infos.sort_by(|a, b| a.upload_timestamp.cmp(&b.upload_timestamp));
+
+        B2ObjectInternals { infos }
+    }
+
+    fn latest(&self) -> &FileInfo {
+        &self.infos[self.infos.len() - 1]
+    }
+
+    fn file_name(&self) -> &str {
+        &self.latest().file_name
+    }
+
+    fn size(&self) -> u64 {
+        self.latest().content_length
+    }
+}
+
+fn new_object(bucket: &str, info: B2ObjectInternals, prefix: &ObjectPath) -> StorageResult<Object> {
+    let mut path = ObjectPath::new(info.file_name())?;
     path.shift_part(bucket);
     let is_dir = path.is_dir_prefix();
 
@@ -109,10 +134,10 @@ fn new_object(bucket: &str, info: &FileInfo, prefix: &ObjectPath) -> StorageResu
     }
 
     Ok(Object {
-        internals: ObjectInternals::B2,
         object_type: o_type,
         path,
-        size: info.content_length,
+        size: info.size(),
+        internals: ObjectInternals::B2(info),
     })
 }
 
@@ -342,7 +367,7 @@ where
     fn take_response(&mut self, response: S) -> Vec<FileInfo>;
 }
 
-struct FileNamesRequestor {
+/*struct FileNamesRequestor {
     client: B2Client,
     path: ObjectPath,
     options: Option<ListFileNamesRequest>,
@@ -380,6 +405,48 @@ impl ListRequestor<ListFileNamesResponse> for FileNamesRequestor {
 
         response.files
     }
+}*/
+
+struct FileVersionsRequestor {
+    client: B2Client,
+    path: ObjectPath,
+    options: Option<ListFileVersionsRequest>,
+}
+
+impl FileVersionsRequestor {
+    fn new(
+        client: B2Client,
+        path: ObjectPath,
+        options: ListFileVersionsRequest,
+    ) -> FileVersionsRequestor {
+        FileVersionsRequestor {
+            client,
+            path,
+            options: Some(options),
+        }
+    }
+}
+
+impl ListRequestor<ListFileVersionsResponse> for FileVersionsRequestor {
+    fn next_request(&self) -> Option<WrappedFuture<StorageResult<ListFileVersionsResponse>>> {
+        self.options.as_ref().map(|o| {
+            WrappedFuture::<StorageResult<ListFileNamesResponse>>::from_future(
+                self.client
+                    .b2_list_file_versions(self.path.clone(), o.clone()),
+            )
+        })
+    }
+
+    fn take_response(&mut self, response: ListFileVersionsResponse) -> Vec<FileInfo> {
+        if response.next_file_name.is_none() {
+            self.options = None;
+        } else if let Some(ref mut options) = self.options {
+            options.start_file_name = response.next_file_name;
+            options.start_file_id = response.next_file_id;
+        }
+
+        response.files
+    }
 }
 
 /// A stream of objects from B2.
@@ -388,6 +455,7 @@ where
     R: ListRequestor<S> + Unpin + Send + 'static,
     S: Send + 'static,
 {
+    current: Vec<FileInfo>,
     results: Vec<FileInfo>,
     requestor: R,
     future: Option<Pin<Box<WrappedFuture<StorageResult<S>>>>>,
@@ -401,20 +469,13 @@ where
     fn new(requestor: R) -> ListStream<R, S> {
         ListStream {
             requestor,
+            current: Vec::new(),
             results: Vec::new(),
             future: None,
         }
     }
-}
 
-impl<R, S> Stream for ListStream<R, S>
-where
-    R: ListRequestor<S> + Send + Unpin + 'static,
-    S: Send + 'static,
-{
-    type Item = StorageResult<FileInfo>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<FileInfo> {
+    fn poll_next_info(&mut self, cx: &mut Context) -> ResultStreamPoll<FileInfo> {
         loop {
             if !self.results.is_empty() {
                 return Poll::Ready(Some(Ok(self.results.remove(0))));
@@ -435,6 +496,45 @@ where
             } else {
                 return Poll::Ready(None);
             }
+        }
+    }
+}
+
+impl<R, S> Stream for ListStream<R, S>
+where
+    R: ListRequestor<S> + Send + Unpin + 'static,
+    S: Send + 'static,
+{
+    type Item = StorageResult<B2ObjectInternals>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+    ) -> ResultStreamPoll<B2ObjectInternals> {
+        match self.poll_next_info(cx) {
+            Poll::Ready(Some(Ok(info))) => {
+                if self.current.is_empty() {
+                    self.current.push(info);
+                    self.poll_next(cx)
+                } else if self.current[0].file_name == info.file_name {
+                    self.current.push(info);
+                    self.poll_next(cx)
+                } else {
+                    let internals = B2ObjectInternals::new(self.current.drain(..).collect());
+                    self.current.push(info);
+                    Poll::Ready(Some(Ok(internals)))
+                }
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => {
+                if !self.current.is_empty() {
+                    let internals = B2ObjectInternals::new(self.current.drain(..).collect());
+                    Poll::Ready(Some(Ok(internals)))
+                } else {
+                    Poll::Ready(None)
+                }
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -594,19 +694,20 @@ impl StorageBackend for B2Backend {
                 .drain(..)
                 .filter(|b| b.bucket_name.starts_with(&bucket))
                 .map(move |b| {
-                    let options = ListFileNamesRequest {
+                    let options = ListFileVersionsRequest {
                         bucket_id: b.bucket_id.clone(),
                         start_file_name: None,
+                        start_file_id: None,
                         max_file_count: None,
                         prefix: Some(file_part.to_string()),
                         delimiter: None,
                     };
 
                     let requestor =
-                        FileNamesRequestor::new(client.clone(), prefix.clone(), options);
+                        FileVersionsRequestor::new(client.clone(), prefix.clone(), options);
                     let temp_prefix = backend_prefix.clone();
                     ListStream::new(requestor)
-                        .and_then(move |f| ready(new_object(&b.bucket_name, &f, &temp_prefix)))
+                        .and_then(move |i| ready(new_object(&b.bucket_name, i, &temp_prefix)))
                 })
                 .fold(MergedStreams::new(), |mut m, s| {
                     m.push(s);
@@ -677,24 +778,25 @@ impl StorageBackend for B2Backend {
 
             let file = file_part.to_string();
 
-            let options = ListFileNamesRequest {
+            let options = ListFileVersionsRequest {
                 bucket_id: bucket.bucket_id.clone(),
                 start_file_name: None,
+                start_file_id: None,
                 max_file_count: None,
                 prefix: Some(file.clone()),
                 delimiter: Some(String::from("/")),
             };
 
-            let requestor = FileNamesRequestor::new(client.clone(), path.clone(), options);
-            let files: Vec<FileInfo> = ListStream::new(requestor)
-                .try_filter(|info| ready(info.file_name == file))
+            let requestor = FileVersionsRequestor::new(client.clone(), path.clone(), options);
+            let mut internals: Vec<B2ObjectInternals> = ListStream::new(requestor)
+                .try_filter(|internals| ready(internals.file_name() == file))
                 .try_collect()
                 .await?;
-            if files.len() != 1 {
+            if internals.len() != 1 {
                 return Err(error::not_found::<StorageError>(path, None));
             }
 
-            new_object(&bucket.bucket_name, &files[0], &backend_prefix)
+            new_object(&bucket.bucket_name, internals.remove(0), &backend_prefix)
         }
 
         let path = match path.try_into() {

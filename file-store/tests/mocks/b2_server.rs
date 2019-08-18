@@ -533,6 +533,46 @@ impl B2Server {
         api_response!(response)
     }
 
+    async fn b2_list_file_versions(self, _head: Parts, body: ListFileVersionsRequest) -> B2Result {
+        if !body.bucket_id.starts_with(BUCKET_ID_PREFIX) {
+            return Err(B2Error::invalid_bucket_id(&body.bucket_id));
+        }
+
+        let mut dir = self.root.clone();
+        dir.push(&body.bucket_id[BUCKET_ID_PREFIX.len()..]);
+        let start = body.start_file_name.unwrap_or_else(String::new);
+
+        let lister = FileLister::new(
+            &body.bucket_id,
+            dir.as_path(),
+            &body.prefix.unwrap_or_else(String::new),
+            &body.delimiter,
+        )?
+        .filter(|result| match result {
+            Ok(info) => info.file_name >= start,
+            Err(_) => true,
+        });
+
+        let mut response = ListFileVersionsResponse {
+            files: Default::default(),
+            next_file_name: None,
+            next_file_id: None,
+        };
+
+        for result in lister {
+            let info = result?;
+
+            if response.files.len() < DEFAULT_FILE_COUNT {
+                response.files.push(info);
+            } else if response.files.len() == DEFAULT_FILE_COUNT {
+                response.next_file_name = Some(info.file_name);
+                response.next_file_id = info.file_id;
+                break;
+            }
+        }
+
+        api_response!(response)
+    }
     async fn check_auth(&self, auth: &str) -> Result<(), B2Error> {
         let mut state = self.state.lock().await;
         match state.authorizations.remove(auth) {
@@ -596,6 +636,7 @@ impl B2Server {
 
             api_method!(b2_list_buckets, self, method, head, data);
             api_method!(b2_list_file_names, self, method, head, data);
+            api_method!(b2_list_file_versions, self, method, head, data);
 
             Err(B2Error::invalid_parameters("Invalid API method requested."))
         } else if path.starts_with("/download/file/") {

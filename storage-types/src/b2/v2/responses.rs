@@ -85,6 +85,17 @@ pub struct FileInfo {
     pub upload_timestamp: Int,
 }
 
+impl PartialEq for FileInfo {
+    fn eq(&self, other: &FileInfo) -> bool {
+        self.account_id == other.account_id
+            && self.bucket_id == other.bucket_id
+            && self.file_id == other.file_id
+            && self.file_name == other.file_name
+    }
+}
+
+impl Eq for FileInfo {}
+
 pub type GetFileInfoResponse = FileInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -73,12 +73,12 @@ impl fmt::Display for ObjectType {
     }
 }
 
-/// An object of some kind that exists at a poth in the storage system.
+/// An object of some kind that exists at a path in the storage system.
 ///
 /// Most backends only support File objects, and this crate only really supports
 /// manipulating file objects. This type does however support the idea of a non
 /// file type that physically exists at a path.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Object {
     pub(crate) internals: ObjectInternals,
     pub(crate) object_type: ObjectType,
@@ -136,7 +136,7 @@ impl ObjectReference for Object {
     where
         B: StorageBackend,
     {
-        if self.internals.is_from_backend(backend.backend_type()) {
+        if self.internals.from_backend() == backend.backend_type() {
             ObjectFuture::from_value(Ok(self))
         } else {
             self.path.into_object(backend)
