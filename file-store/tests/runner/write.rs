@@ -4,6 +4,7 @@ use std::io::{BufReader, ErrorKind, Read};
 use super::utils::*;
 use super::*;
 
+use file_store::backends::Backend;
 use file_store::*;
 
 pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult<()> {
@@ -322,7 +323,12 @@ pub async fn test_delete_object(fs: &FileStore, context: &TestContext) -> TestRe
     test_pass(fs, context, "test1/dir1/smallfile.txt").await?;
     test_pass(fs, context, "test1/dir1/dir2/daz").await?;
     test_pass(fs, context, "test1/dir1/maybedir").await?;
-    test_pass(fs, context, "test1/dir1/dir2").await?;
+
+    if fs.backend_type() == Backend::File {
+        test_pass(fs, context, "test1/dir1/dir2").await?;
+    } else {
+        test_fail(fs, context, "test1/dir1/dir2").await?;
+    }
 
     test_fail(fs, context, "test1/dir1/biz").await?;
 

@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
-use std::fs::{metadata, read, read_dir, DirEntry};
+use std::fs::{metadata, read, read_dir, remove_file, DirEntry};
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
@@ -301,7 +301,7 @@ impl FileLister {
                             content_length: meta.len(),
                             content_sha1: None,
                             content_type: None,
-                            file_id: Some(format!("{}{}", FILE_ID_PREFIX, file_path)),
+                            file_id: Some(format!("{}{}", FILE_ID_PREFIX, entry.path().display())),
                             file_info: Default::default(),
                             file_name: file_path,
                             upload_timestamp: 0,
@@ -573,6 +573,53 @@ impl B2Server {
 
         api_response!(response)
     }
+
+    async fn b2_delete_file_version(
+        self,
+        _head: Parts,
+        body: DeleteFileVersionRequest,
+    ) -> B2Result {
+        if !body.file_id.starts_with(FILE_ID_PREFIX) || !body.file_id.ends_with(&body.file_name) {
+            return Err(B2Error::new(
+                StatusCode::BAD_REQUEST,
+                "file_not_present",
+                format!("File not present: {} {}", body.file_name, body.file_id),
+            ));
+        }
+
+        let path = &body.file_id[FILE_ID_PREFIX.len()..];
+
+        match metadata(path) {
+            Ok(meta) => {
+                if !meta.is_file() {
+                    return Err(B2Error::new(
+                        StatusCode::BAD_REQUEST,
+                        "file_not_present",
+                        format!("File not present: {} {}", body.file_name, body.file_id),
+                    ));
+                }
+
+                remove_file(path)?;
+
+                api_response!(DeleteFileVersionResponse {
+                    file_id: body.file_id,
+                    file_name: body.file_name,
+                })
+            }
+            Err(e) => {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Err(B2Error::new(
+                        StatusCode::BAD_REQUEST,
+                        "file_not_present",
+                        format!("File not present: {} {}", body.file_name, body.file_id),
+                    ))
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
+    }
+
     async fn check_auth(&self, auth: &str) -> Result<(), B2Error> {
         let mut state = self.state.lock().await;
         match state.authorizations.remove(auth) {
@@ -637,6 +684,7 @@ impl B2Server {
             api_method!(b2_list_buckets, self, method, head, data);
             api_method!(b2_list_file_names, self, method, head, data);
             api_method!(b2_list_file_versions, self, method, head, data);
+            api_method!(b2_delete_file_version, self, method, head, data);
 
             Err(B2Error::invalid_parameters("Invalid API method requested."))
         } else if path.starts_with("/download/file/") {

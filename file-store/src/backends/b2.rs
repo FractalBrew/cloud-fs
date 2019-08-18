@@ -32,6 +32,7 @@ use std::future::Future;
 use std::io::Read;
 use std::ops::Deref;
 use std::pin::Pin;
+use std::slice::Iter;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -114,6 +115,10 @@ impl B2ObjectInternals {
 
     fn size(&self) -> u64 {
         self.latest().content_length
+    }
+
+    fn iter(&self) -> Iter<FileInfo> {
+        self.infos.iter()
     }
 }
 
@@ -336,6 +341,11 @@ impl B2Client {
         b2_list_file_versions,
         ListFileVersionsRequest,
         ListFileVersionsResponse
+    );
+    b2_api!(
+        b2_delete_file_version,
+        DeleteFileVersionRequest,
+        DeleteFileVersionResponse
     );
 
     async fn reset_session(&self, auth_token: &str) {
@@ -855,11 +865,45 @@ impl StorageBackend for B2Backend {
         DataStreamFuture::from_future(future)
     }
 
-    fn delete_object<O>(&self, _reference: O) -> OperationCompleteFuture
+    fn delete_object<O>(&self, reference: O) -> OperationCompleteFuture
     where
         O: ObjectReference,
     {
-        unimplemented!();
+        async fn delete<O>(backend: B2Backend, reference: O) -> StorageResult<()>
+        where
+            O: ObjectReference,
+        {
+            let object = reference.into_object(&backend).await?;
+            let path = object.path();
+            let internals: B2ObjectInternals = object.try_into()?;
+
+            for info in internals.iter() {
+                match info.file_id {
+                    Some(ref id) => {
+                        backend
+                            .client()
+                            .b2_delete_file_version(
+                                path.clone(),
+                                DeleteFileVersionRequest {
+                                    file_name: info.file_name.clone(),
+                                    file_id: id.to_owned(),
+                                },
+                            )
+                            .await?;
+                    }
+                    None => {
+                        return Err(error::internal_error::<StorageError>(
+                            "Expected object to have a file id.",
+                            None,
+                        ))
+                    }
+                }
+            }
+
+            Ok(())
+        }
+
+        OperationCompleteFuture::from_future(delete(self.clone(), reference))
     }
 
     fn write_file_from_stream<S, I, E, P>(&self, _path: P, _stream: S) -> WriteCompleteFuture
@@ -892,6 +936,8 @@ fn generate_error(method: &str, path: &ObjectPath, response: &str) -> StorageErr
         ),
         (_, 400, "bad_request") => error::internal_error::<StorageError>(&error.message, None),
         (_, 400, "invalid_bucket_id") => error::not_found::<StorageError>(path.to_owned(), None),
+        (_, 400, "bad_bucket_id") => error::not_found::<StorageError>(path.to_owned(), None),
+        (_, 400, "file_not_present") => error::not_found::<StorageError>(path.to_owned(), None),
         (_, 400, "out_of_range") => error::internal_error::<StorageError>(&error.message, None),
         (_, 401, "unauthorized") => error::access_denied::<StorageError>(
             "The application key id or key were not recognized.",

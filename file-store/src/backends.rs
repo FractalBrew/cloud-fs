@@ -9,7 +9,7 @@ pub mod b2;
 #[cfg(feature = "file")]
 pub mod file;
 
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::error::Error;
 use std::fmt;
 
@@ -56,6 +56,21 @@ impl ObjectInternals {
             ObjectInternals::File => Backend::File,
             #[cfg(feature = "b2")]
             ObjectInternals::B2(_) => Backend::B2,
+        }
+    }
+}
+
+#[cfg(feature = "b2")]
+impl TryFrom<Object> for b2::B2ObjectInternals {
+    type Error = StorageError;
+
+    fn try_from(object: Object) -> StorageResult<b2::B2ObjectInternals> {
+        match object.internals {
+            ObjectInternals::B2(i) => Ok(i),
+            _ => Err(error::internal_error::<StorageError>(
+                "Object came from a different backend.",
+                None,
+            )),
         }
     }
 }

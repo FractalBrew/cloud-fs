@@ -112,3 +112,10 @@ pub struct ListFileVersionsResponse {
     pub next_file_name: Option<String>,
     pub next_file_id: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteFileVersionResponse {
+    pub file_name: String,
+    pub file_id: String,
+}

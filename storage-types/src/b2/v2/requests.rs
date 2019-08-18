@@ -41,3 +41,10 @@ pub struct ListFileVersionsRequest {
     pub prefix: Option<String>,
     pub delimiter: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteFileVersionRequest {
+    pub file_name: String,
+    pub file_id: String,
+}
