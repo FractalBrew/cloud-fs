@@ -114,3 +114,34 @@ where
         Poll::Pending
     }
 }
+
+pub struct VecStream<T>
+where
+    T: Unpin,
+{
+    inner: Vec<T>,
+}
+
+impl<T> VecStream<T>
+where
+    T: Unpin,
+{
+    pub fn from(inner: Vec<T>) -> VecStream<T> {
+        VecStream { inner }
+    }
+}
+
+impl<T> Stream for VecStream<T>
+where
+    T: Unpin,
+{
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context) -> StreamPoll<T> {
+        if !self.inner.is_empty() {
+            Poll::Ready(Some(self.inner.remove(0)))
+        } else {
+            Poll::Ready(None)
+        }
+    }
+}

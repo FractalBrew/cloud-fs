@@ -19,8 +19,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::buf::FromBuf;
-use bytes::{BytesMut, IntoBuf};
+use bytes::BytesMut;
 use futures::compat::*;
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{once, Stream, StreamExt, TryStreamExt};
@@ -449,23 +448,19 @@ impl StorageBackend for FileBackend {
         }
     }
 
-    fn write_file_from_stream<S, I, E, P>(&self, path: P, stream: S) -> WriteCompleteFuture
+    fn write_file_from_stream<S, P>(&self, path: P, stream: S) -> WriteCompleteFuture
     where
-        S: Stream<Item = Result<I, E>> + Send + 'static,
-        I: IntoBuf + 'static,
-        E: 'static + std::error::Error + Send + Sync,
+        S: Stream<Item = StorageResult<Data>> + Send + 'static,
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>,
     {
-        async fn write<S, I, E>(
+        async fn write<S>(
             space: FileSpace,
             path: ObjectPath,
-            stream: S,
+            mut stream: S,
         ) -> Result<(), TransferError>
         where
-            S: Stream<Item = Result<I, E>> + Send + 'static,
-            I: IntoBuf + 'static,
-            E: 'static + std::error::Error + Send + Sync,
+            S: Stream<Item = StorageResult<Data>> + Send + Unpin + 'static,
         {
             let target = space
                 .get_std_path(&path)
@@ -494,13 +489,8 @@ impl StorageBackend for FileBackend {
                 .await
                 .map_err(TransferError::TargetError)?;
 
-            let mut mapped = Box::pin(stream.map(|r| match r {
-                Ok(b) => Ok(Data::from_buf(b)),
-                Err(e) => Err(error::other_error(&e.to_string(), Some(e))),
-            }));
-
             loop {
-                let option = mapped.next().await;
+                let option = stream.next().await;
                 if let Some(result) = option {
                     let data = result.map_err(TransferError::SourceError)?;
                     file = match write_all(file, data).compat().await {
@@ -525,6 +515,6 @@ impl StorageBackend for FileBackend {
             }
         };
 
-        WriteCompleteFuture::from_future(write(self.space.clone(), path, stream))
+        WriteCompleteFuture::from_future(write(self.space.clone(), path, Box::pin(stream)))
     }
 }

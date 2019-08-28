@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::BucketTypes;
-use crate::JSInt as Int;
+use super::{BucketTypes, Int, Map};
 
 pub const B2_API_HOST: &str = "https://api.backblazeb2.com";
 pub const B2_VERSION: &str = "v2";
@@ -47,4 +46,32 @@ pub struct ListFileVersionsRequest {
 pub struct DeleteFileVersionRequest {
     pub file_name: String,
     pub file_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUploadUrlRequest {
+    pub bucket_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartLargeFileRequest {
+    pub bucket_id: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub file_info: Option<Map>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUploadPartUrlRequest {
+    pub file_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinishLargeFileRequest {
+    pub file_id: String,
+    pub part_sha1_array: Vec<String>,
 }

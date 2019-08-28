@@ -1,5 +1,4 @@
 #![cfg(feature = "b2")]
-#![feature(async_await)]
 #![allow(clippy::needless_lifetimes)]
 
 extern crate file_store;
@@ -26,6 +25,7 @@ mod test1 {
 
         let fs = B2Backend::builder("foo", "bar")
             .host(&format!("http://{}", addr))
+            .limit_small_file_size(20 * 1024 * 1024)
             .connect()
             .await?;
         Ok((fs, sender))

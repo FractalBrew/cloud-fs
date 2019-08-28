@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub use super::BucketType;
-use crate::{JSInt as Int, JSMap as Map};
+use super::{BucketType, Int, Map};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,3 +118,35 @@ pub struct DeleteFileVersionResponse {
     pub file_name: String,
     pub file_id: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUploadUrlResponse {
+    pub bucket_id: String,
+    pub upload_url: String,
+    pub authorization_token: String,
+}
+
+pub type UploadFileResponse = FileInfo;
+
+pub type StartLargeFileResponse = FileInfo;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUploadPartUrlResponse {
+    pub file_id: String,
+    pub upload_url: String,
+    pub authorization_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadPartResponse {
+    pub file_id: String,
+    pub part_number: usize,
+    pub content_length: Int,
+    pub content_sha1: String,
+    pub upload_timestamp: Int,
+}
+
+pub type FinishLargeFileResponse = FileInfo;

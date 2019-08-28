@@ -4,12 +4,37 @@ pub mod v2 {
 
     use std::collections::HashSet;
     use std::fmt;
+    use std::str::Utf8Error;
 
+    use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
     use serde::de;
     use serde::de::{Deserializer, Error, SeqAccess};
     use serde::ser;
 
+    pub type Int = u64;
+    pub type Map = serde_json::Map<String, serde_json::Value>;
+
     struct BucketTypeListVisitor;
+
+    /// The set of characters to percent encode.
+    ///
+    /// B2 docs approve of encoding absolutely everything but the `/` cannot be
+    /// encoded in paths so this takes the conservative approach and encodes
+    /// everything except alpha-numeric characters and the `/` character.
+    /// Encoding spaces as `%20` is fine even though B2 will return spaces
+    /// encoded as `+`.
+    const ENCODE_SET: AsciiSet = NON_ALPHANUMERIC.remove(b'/');
+
+    pub fn percent_decode(value: &str) -> Result<String, Utf8Error> {
+        // Must first convert `+` characters back to spaces.
+        let string = value.replace('+', " ");
+
+        Ok(percent_decode_str(&string).decode_utf8()?.into_owned())
+    }
+
+    pub fn percent_encode(value: &str) -> String {
+        utf8_percent_encode(value, &ENCODE_SET).collect()
+    }
 
     impl<'de> de::Visitor<'de> for BucketTypeListVisitor {
         type Value = BucketTypes;

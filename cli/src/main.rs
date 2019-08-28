@@ -1,4 +1,3 @@
-#![feature(async_await)]
 mod commands;
 
 use std::path::Path;

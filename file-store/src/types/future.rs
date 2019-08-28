@@ -6,7 +6,10 @@ use std::task::{Context, Poll};
 
 use futures::future::ready;
 
+use super::StorageResult;
+
 pub(crate) type FuturePoll<R> = Poll<R>;
+pub(crate) type ResultFuturePoll<R> = Poll<StorageResult<R>>;
 
 pub(crate) type PinnedFuture<R> = Pin<Box<dyn Future<Output = R> + Send + 'static>>;
 

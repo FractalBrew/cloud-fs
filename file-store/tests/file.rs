@@ -1,5 +1,4 @@
 #![cfg(feature = "file")]
-#![feature(async_await)]
 #![allow(clippy::needless_lifetimes)]
 
 extern crate file_store;

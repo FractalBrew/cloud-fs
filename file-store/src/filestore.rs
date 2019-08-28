@@ -2,8 +2,9 @@
 use std::convert::TryInto;
 use std::error::Error;
 
+use bytes::buf::FromBuf;
 use bytes::IntoBuf;
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt};
 
 use super::backends::{Backend, BackendImplementation, StorageBackend};
 use super::types::*;
@@ -153,6 +154,14 @@ impl FileStore {
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>,
     {
-        call_backend!(&self.backend, write_file_from_stream, path, stream)
+        call_backend!(
+            &self.backend,
+            write_file_from_stream,
+            path,
+            stream.map(|r| match r {
+                Ok(d) => Ok(Data::from_buf(d)),
+                Err(e) => Err(error::other_error(&e.to_string(), Some(e))),
+            })
+        )
     }
 }

@@ -10,10 +10,8 @@ pub mod b2;
 pub mod file;
 
 use std::convert::{TryFrom, TryInto};
-use std::error::Error;
 use std::fmt;
 
-use bytes::IntoBuf;
 use futures::future::TryFutureExt;
 use futures::stream::Stream;
 
@@ -167,11 +165,9 @@ pub trait StorageBackend: Clone + Send + 'static {
         O: ObjectReference;
 
     /// See [`write_file_from_stream`](../../struct.FileStore.html#method.write_file_from_stream).
-    fn write_file_from_stream<S, I, E, P>(&self, path: P, stream: S) -> WriteCompleteFuture
+    fn write_file_from_stream<S, P>(&self, path: P, stream: S) -> WriteCompleteFuture
     where
-        S: Stream<Item = Result<I, E>> + Send + 'static,
-        I: IntoBuf + 'static,
-        E: 'static + Error + Send + Sync,
+        S: Stream<Item = StorageResult<Data>> + Send + 'static,
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>;
 }

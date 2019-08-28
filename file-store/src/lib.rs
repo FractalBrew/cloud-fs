@@ -17,7 +17,6 @@
 //! storage. A [FileStore](struct.FileStore.html) is created from one of the
 //! backend specific structs.
 #![warn(missing_docs)]
-#![feature(async_await)]
 
 #[macro_use]
 pub mod backends;

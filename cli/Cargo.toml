@@ -8,4 +8,4 @@ edition = "2018"
 file-store = { path = "../file-store" }
 clap = { version = "~2.33.0", features = ["yaml"] }
 yaml-rust = "^0.3.5"
-futures-preview = { version = "=0.3.0-alpha.17", features = ["async-await", "nightly"] }
+futures-preview = { version = "=0.3.0-alpha.18", features = ["async-await", "nightly"] }

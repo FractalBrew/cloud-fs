@@ -279,6 +279,7 @@ pub async fn test_get_file_stream(fs: &FileStore, context: &TestContext) -> Test
     test_fail(fs, context, "test1/dir1/dir2").await?;
     test_fail(fs, context, "test1/dir1/daz").await?;
     test_fail(fs, context, "test1/dir1/foo/bar").await?;
+    test_fail(fs, context, "test1/dir1/dir2/gaz").await?;
 
     Ok(())
 }

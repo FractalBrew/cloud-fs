@@ -27,6 +27,7 @@
 //!
 //! The last modified time of an uploaded file will be set to the time that the
 //! upload began.
+use std::cmp::max;
 use std::convert::{TryFrom, TryInto};
 use std::future::Future;
 use std::io::Read;
@@ -37,7 +38,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use base64::encode;
-use bytes::IntoBuf;
+use bytes::buf::FromBuf;
 use futures::compat::*;
 use futures::future::{ready, TryFutureExt};
 use futures::lock::Mutex;
@@ -50,18 +51,24 @@ use hyper::{Request, Response};
 use hyper_tls::HttpsConnector;
 use serde::de::DeserializeOwned;
 use serde_json::{from_str, to_string};
+use sha1::Sha1;
 
+use storage_types::b2::v2::percent_encode;
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
 
 use super::{Backend, BackendImplementation, ObjectInternals, StorageBackend};
 use crate::filestore::FileStore;
-use crate::types::stream::{MergedStreams, ResultStreamPoll};
+use crate::types::future::{FuturePoll, ResultFuturePoll};
+use crate::types::stream::{MergedStreams, ResultStreamPoll, VecStream};
 use crate::types::*;
 
 type Client = HyperClient<HttpsConnector<HttpConnector>>;
+type StringFuture = WrappedFuture<StorageResult<String>>;
 
 const API_RETRIES: usize = 3;
+const TOTAL_MAX_SMALL_FILE_SIZE: u64 = 5 * 1000 * 1000 * 1000;
+const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 1000 * 1000 * 1000;
 
 impl From<http::Error> for StorageError {
     fn from(error: http::Error) -> StorageError {
@@ -152,6 +159,7 @@ struct B2Settings {
     key: String,
     host: String,
     prefix: ObjectPath,
+    max_small_file_size: u64,
 }
 
 macro_rules! b2_api {
@@ -303,7 +311,12 @@ impl B2Client {
 
             let request = Request::builder()
                 .method(Method::GET)
-                .uri(format!("{}/file/{}/{}", download_url, bucket, file))
+                .uri(format!(
+                    "{}/file/{}/{}",
+                    download_url,
+                    percent_encode(&bucket),
+                    percent_encode(&file)
+                ))
                 .header("Authorization", &authorization)
                 .body(Body::empty())?;
 
@@ -330,6 +343,54 @@ impl B2Client {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    async fn b2_upload_file(
+        self,
+        path: ObjectPath,
+        url: String,
+        auth: String,
+        file_name: String,
+        content_type: String,
+        length: u64,
+        hash: String,
+        stream: DataStream,
+    ) -> StorageResult<UploadFileResponse> {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(url)
+            .header("Authorization", auth)
+            .header("X-Bz-File-Name", percent_encode(&file_name))
+            .header("Content-Type", content_type)
+            .header("Content-Length", length)
+            .header("X-Bz-Content-Sha1", hash)
+            .body(Body::wrap_stream(Compat::new(stream)))?;
+
+        self.basic_request("b2_upload_file", path, request).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn b2_upload_part(
+        self,
+        path: ObjectPath,
+        url: String,
+        auth: String,
+        part: usize,
+        length: u64,
+        hash: String,
+        stream: DataStream,
+    ) -> StorageResult<UploadPartResponse> {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(url)
+            .header("Authorization", auth)
+            .header("X-Bz-Part-Number", part)
+            .header("Content-Length", length)
+            .header("X-Bz-Content-Sha1", hash)
+            .body(Body::wrap_stream(Compat::new(stream)))?;
+
+        self.basic_request("b2_upload_part", path, request).await
+    }
+
     b2_api!(b2_list_buckets, ListBucketsRequest, ListBucketsResponse);
     b2_api!(b2_get_file_info, GetFileInfoRequest, GetFileInfoResponse);
     b2_api!(
@@ -346,6 +407,22 @@ impl B2Client {
         b2_delete_file_version,
         DeleteFileVersionRequest,
         DeleteFileVersionResponse
+    );
+    b2_api!(b2_get_upload_url, GetUploadUrlRequest, GetUploadUrlResponse);
+    b2_api!(
+        b2_start_large_file,
+        StartLargeFileRequest,
+        StartLargeFileResponse
+    );
+    b2_api!(
+        b2_get_upload_part_url,
+        GetUploadPartUrlRequest,
+        GetUploadPartUrlResponse
+    );
+    b2_api!(
+        b2_finish_large_file,
+        FinishLargeFileRequest,
+        FinishLargeFileResponse
     );
 
     async fn reset_session(&self, auth_token: &str) {
@@ -365,6 +442,468 @@ impl B2Client {
             let new_session = self.b2_authorize_account().await?;
             session.replace(new_session.clone());
             Ok(new_session)
+        }
+    }
+}
+
+enum LargeFileState {
+    Starting(Pin<Box<WrappedFuture<StorageResult<GetUploadPartUrlResponse>>>>),
+    Uploading(GetUploadPartUrlResponse),
+    Finishing(Pin<Box<OperationCompleteFuture>>),
+    Complete,
+}
+
+enum PartState {
+    Waiting(Vec<Data>),
+    Pending(Pin<Box<StringFuture>>),
+    Complete(String),
+}
+
+struct LargeFileUploader {
+    client: B2Client,
+    path: ObjectPath,
+    done: bool,
+    parts: Vec<PartState>,
+    state: LargeFileState,
+}
+
+impl LargeFileUploader {
+    fn new(client: B2Client, path: ObjectPath, bucket_id: &str, file: &str) -> LargeFileUploader {
+        LargeFileUploader {
+            client: client.clone(),
+            path: path.clone(),
+            done: false,
+            parts: Default::default(),
+            state: LargeFileState::Starting(Box::pin(WrappedFuture::<
+                StorageResult<GetUploadPartUrlResponse>,
+            >::from_future(
+                LargeFileUploader::start_upload(
+                    client,
+                    path,
+                    bucket_id.to_owned(),
+                    file.to_owned(),
+                ),
+            ))),
+        }
+    }
+
+    async fn start_upload(
+        client: B2Client,
+        path: ObjectPath,
+        bucket_id: String,
+        file_name: String,
+    ) -> StorageResult<GetUploadPartUrlResponse> {
+        let request = StartLargeFileRequest {
+            bucket_id,
+            file_name,
+            content_type: String::from("b2/x-auto"),
+            file_info: None,
+        };
+
+        let result = client.b2_start_large_file(path.clone(), request).await?;
+
+        let file_id = match result.file_id {
+            Some(s) => s,
+            None => {
+                return Err(error::invalid_data::<StorageError>(
+                    "Attempt to request large file upload failed.",
+                    None,
+                ))
+            }
+        };
+
+        let request = GetUploadPartUrlRequest {
+            file_id: file_id.clone(),
+        };
+
+        client.b2_get_upload_part_url(path, request).await
+    }
+
+    async fn upload_part(
+        client: B2Client,
+        part: usize,
+        path: ObjectPath,
+        mut buffers: Vec<Data>,
+        upload_info: GetUploadPartUrlResponse,
+    ) -> StorageResult<String> {
+        assert!(part > 0);
+
+        let mut hasher = Sha1::new();
+        let mut len: u64 = 0;
+
+        for b in buffers.iter() {
+            hasher.update(&b);
+            len += b.len() as u64;
+        }
+
+        let hash = hasher.hexdigest();
+
+        client
+            .b2_upload_part(
+                path,
+                upload_info.upload_url,
+                upload_info.authorization_token,
+                part,
+                len,
+                hash.clone(),
+                DataStream::from_stream(VecStream::from(buffers.drain(..).map(Ok).collect())),
+            )
+            .await?;
+
+        Ok(hash)
+    }
+
+    async fn finish_upload(
+        client: B2Client,
+        file_id: String,
+        path: ObjectPath,
+        parts: Vec<String>,
+    ) -> StorageResult<()> {
+        client
+            .b2_finish_large_file(
+                path,
+                FinishLargeFileRequest {
+                    file_id,
+                    part_sha1_array: parts,
+                },
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    fn all_parts_added(&mut self) {
+        self.done = true;
+    }
+
+    fn add_part(&mut self, buffers: Vec<Data>) {
+        assert!(!self.done);
+
+        match self.state {
+            LargeFileState::Starting(_) => self.parts.push(PartState::Waiting(buffers)),
+            LargeFileState::Uploading(ref id) => {
+                let part = self.parts.len() + 1;
+                self.parts
+                    .push(PartState::Pending(Box::pin(StringFuture::from_future(
+                        LargeFileUploader::upload_part(
+                            self.client.clone(),
+                            part,
+                            self.path.clone(),
+                            buffers,
+                            id.clone(),
+                        ),
+                    ))))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn inner_poll(&mut self, cx: &mut Context) -> Option<ResultFuturePoll<()>> {
+        match self.state {
+            LargeFileState::Starting(ref mut fut) => match fut.as_mut().poll(cx) {
+                Poll::Ready(Ok(id)) => {
+                    self.state = LargeFileState::Uploading(id.clone());
+                    let client = self.client.clone();
+                    let path = self.path.clone();
+                    for i in 0..self.parts.len() {
+                        match self.parts[i] {
+                            PartState::Waiting(ref mut buffers) => {
+                                self.parts[i] = PartState::Pending(Box::pin(
+                                    StringFuture::from_future(LargeFileUploader::upload_part(
+                                        client.clone(),
+                                        i + 1,
+                                        path.clone(),
+                                        buffers.to_vec(),
+                                        id.clone(),
+                                    )),
+                                ))
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    return None;
+                }
+                Poll::Ready(Err(e)) => return Some(Poll::Ready(Err(e))),
+                Poll::Pending => return Some(Poll::Pending),
+            },
+            LargeFileState::Uploading(ref upload_state) => {
+                let mut all_done = true;
+                for i in 0..self.parts.len() {
+                    if let PartState::Pending(ref mut fut) = self.parts[i] {
+                        match fut.as_mut().poll(cx) {
+                            Poll::Ready(Ok(hash)) => {
+                                self.parts[i] = PartState::Complete(hash);
+                            }
+                            Poll::Ready(Err(e)) => return Some(Poll::Ready(Err(e))),
+                            Poll::Pending => all_done = false,
+                        }
+                    }
+                }
+
+                if !all_done {
+                    return Some(Poll::Pending);
+                }
+
+                if self.done {
+                    let hashes = self
+                        .parts
+                        .drain(..)
+                        .map(|p| match p {
+                            PartState::Complete(s) => s,
+                            _ => unreachable!(),
+                        })
+                        .collect();
+                    self.state = LargeFileState::Finishing(Box::pin(
+                        OperationCompleteFuture::from_future(LargeFileUploader::finish_upload(
+                            self.client.clone(),
+                            upload_state.file_id.clone(),
+                            self.path.clone(),
+                            hashes,
+                        )),
+                    ));
+                }
+            }
+            LargeFileState::Finishing(ref mut fut) => match fut.as_mut().poll(cx) {
+                Poll::Ready(Ok(())) => {
+                    self.state = LargeFileState::Complete;
+                    return Some(Poll::Ready(Ok(())));
+                }
+                Poll::Ready(Err(e)) => {
+                    self.state = LargeFileState::Complete;
+                    return Some(Poll::Ready(Err(e)));
+                }
+                Poll::Pending => return Some(Poll::Pending),
+            },
+            LargeFileState::Complete => return Some(Poll::Ready(Ok(()))),
+        }
+
+        None
+    }
+}
+
+impl Future for LargeFileUploader {
+    type Output = StorageResult<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultFuturePoll<()> {
+        loop {
+            if let Some(r) = self.inner_poll(cx) {
+                return r;
+            }
+        }
+    }
+}
+
+enum UploadState {
+    Buffering(Sha1),
+    SmallFileUpload(Pin<Box<OperationCompleteFuture>>),
+    LargeFileUpload(Pin<Box<LargeFileUploader>>),
+}
+
+struct Uploader<S>
+where
+    S: Stream<Item = StorageResult<Data>> + Send + 'static,
+{
+    recommended_part_size: u64,
+    maximum_small_file_size: u64,
+    stream: Pin<Box<S>>,
+    bucket_id: String,
+    path: ObjectPath,
+    file: String,
+    client: B2Client,
+    buffers: Vec<Data>,
+    len: u64,
+    state: UploadState,
+    done: bool,
+}
+
+impl<S> Uploader<S>
+where
+    S: Stream<Item = StorageResult<Data>> + Send + 'static,
+{
+    async fn small_upload(
+        client: B2Client,
+        path: ObjectPath,
+        bucket_id: String,
+        file_name: String,
+        mut data: Vec<Data>,
+        size: u64,
+        hash: String,
+    ) -> StorageResult<()> {
+        let response = client
+            .clone()
+            .b2_get_upload_url(path.clone(), GetUploadUrlRequest { bucket_id })
+            .await?;
+
+        client
+            .b2_upload_file(
+                path,
+                response.upload_url,
+                response.authorization_token,
+                file_name,
+                String::from("b2/x-auto"),
+                size,
+                hash,
+                DataStream::from_stream(VecStream::from(data.drain(..).map(Ok).collect())),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn upload(
+        client: B2Client,
+        max_small_file_size: u64,
+        path: ObjectPath,
+        bucket_id: String,
+        file: String,
+        stream: S,
+    ) -> Result<(), TransferError> {
+        let uploader = {
+            let session = client.session().await.map_err(TransferError::TargetError)?;
+
+            Uploader {
+                recommended_part_size: session.recommended_part_size,
+                maximum_small_file_size: max(
+                    max_small_file_size,
+                    session.absolute_minimum_part_size,
+                ),
+                state: UploadState::Buffering(Sha1::new()),
+                done: false,
+                client,
+                path,
+                bucket_id,
+                file,
+                stream: Box::pin(stream),
+                buffers: Default::default(),
+                len: 0,
+            }
+        };
+
+        uploader.await
+    }
+
+    fn inner_poll(&mut self, cx: &mut Context) -> Option<FuturePoll<Result<(), TransferError>>> {
+        // First drive any existing uploads.
+        match self.state {
+            UploadState::SmallFileUpload(ref mut sf) => {
+                return Some(match sf.as_mut().poll(cx) {
+                    Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+                    Poll::Ready(Err(e)) => Poll::Ready(Err(TransferError::TargetError(e))),
+                    Poll::Pending => Poll::Pending,
+                });
+            }
+            UploadState::LargeFileUpload(ref mut lf) => match lf.as_mut().poll(cx) {
+                Poll::Ready(Ok(())) => return Some(Poll::Ready(Ok(()))),
+                Poll::Ready(Err(e)) => {
+                    return Some(Poll::Ready(Err(TransferError::TargetError(e))))
+                }
+                _ => (),
+            },
+            _ => {
+                assert!(!self.done);
+            }
+        }
+
+        if self.done {
+            return Some(Poll::Pending);
+        }
+
+        // Try to pull some new data.
+        let data = match self.stream.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(d))) => Data::from_buf(d),
+            Poll::Ready(Some(Err(e))) => {
+                return Some(Poll::Ready(Err(TransferError::SourceError(e))));
+            }
+            Poll::Ready(None) => {
+                // All the data has been read. Switch to pending state.
+                self.done = true;
+
+                match self.state {
+                    UploadState::Buffering(ref mut hasher) => {
+                        // Start a small file upload.
+                        self.state = UploadState::SmallFileUpload(Box::pin(
+                            OperationCompleteFuture::from_future(Uploader::<S>::small_upload(
+                                self.client.clone(),
+                                self.path.clone(),
+                                self.bucket_id.clone(),
+                                self.file.clone(),
+                                self.buffers.drain(..).collect(),
+                                self.len,
+                                hasher.hexdigest(),
+                            )),
+                        ));
+                    }
+                    UploadState::LargeFileUpload(ref mut lf) => {
+                        lf.add_part(self.buffers.drain(..).collect());
+                        lf.all_parts_added();
+                    }
+                    _ => unreachable!(),
+                }
+                return None;
+            }
+            Poll::Pending => return Some(Poll::Pending),
+        };
+
+        self.len += data.len() as u64;
+        self.buffers.push(data);
+
+        match self.state {
+            UploadState::Buffering(ref mut hasher) => {
+                hasher.update(&self.buffers[self.buffers.len() - 1]);
+
+                if self.len > self.maximum_small_file_size {
+                    // Start a large file upload.
+                    let target = self.maximum_small_file_size;
+                    let mut lf = LargeFileUploader::new(
+                        self.client.clone(),
+                        self.path.clone(),
+                        &self.bucket_id,
+                        &self.file,
+                    );
+                    let (buffers, len) = self.buffers.drain(..).fold(
+                        (Vec::<Data>::new(), 0 as u64),
+                        |(mut buffers, mut len), data| {
+                            len += data.len() as u64;
+                            buffers.push(data);
+
+                            if len >= target {
+                                lf.add_part(buffers);
+                                Default::default()
+                            } else {
+                                (buffers, len)
+                            }
+                        },
+                    );
+
+                    self.buffers = buffers;
+                    self.len = len;
+                    self.state = UploadState::LargeFileUpload(Box::pin(lf));
+                }
+            }
+            UploadState::LargeFileUpload(ref mut lf) => {
+                if self.len >= self.recommended_part_size {
+                    lf.add_part(self.buffers.drain(..).collect());
+                    self.len = 0;
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        None
+    }
+}
+
+impl<S> Future for Uploader<S>
+where
+    S: Stream<Item = StorageResult<Data>> + Send + 'static,
+{
+    type Output = Result<(), TransferError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> FuturePoll<Result<(), TransferError>> {
+        loop {
+            if let Some(r) = self.inner_poll(cx) {
+                return r;
+            }
         }
     }
 }
@@ -523,10 +1062,7 @@ where
     ) -> ResultStreamPoll<B2ObjectInternals> {
         match self.poll_next_info(cx) {
             Poll::Ready(Some(Ok(info))) => {
-                if self.current.is_empty() {
-                    self.current.push(info);
-                    self.poll_next(cx)
-                } else if self.current[0].file_name == info.file_name {
+                if self.current.is_empty() || self.current[0].file_name == info.file_name {
                     self.current.push(info);
                     self.poll_next(cx)
                 } else {
@@ -575,6 +1111,7 @@ impl B2Backend {
                 key: key.to_owned(),
                 host: B2_API_HOST.to_owned(),
                 prefix: ObjectPath::empty(),
+                max_small_file_size: DEFAULT_MAX_SMALL_FILE_SIZE,
             },
         }
     }
@@ -587,6 +1124,36 @@ impl B2Backend {
             client: self.client.clone(),
             session: self.session.clone(),
         }
+    }
+
+    async fn expand_path(
+        client: B2Client,
+        prefix: ObjectPath,
+        path: ObjectPath,
+    ) -> StorageResult<(Bucket, String)> {
+        let mut file_part = prefix.join(&path);
+        let bucket_name = match file_part.unshift_part() {
+            Some(b) => b,
+            None => return Err(error::not_found::<StorageError>(path, None)),
+        };
+
+        if file_part.is_empty() {
+            return Err(error::not_found::<StorageError>(path, None));
+        }
+
+        let request = ListBucketsRequest {
+            account_id: client.account_id().await?,
+            bucket_id: None,
+            bucket_name: Some(bucket_name),
+            bucket_types: Default::default(),
+        };
+
+        let mut buckets = client.b2_list_buckets(path.clone(), request).await?.buckets;
+        if buckets.len() != 1 {
+            return Err(error::not_found::<StorageError>(path, None));
+        }
+
+        Ok((buckets.remove(0), file_part.to_string()))
     }
 }
 
@@ -614,6 +1181,27 @@ impl B2BackendBuilder {
     /// directory parts within that bucket.
     pub fn prefix(mut self, prefix: ObjectPath) -> B2BackendBuilder {
         self.settings.prefix = prefix;
+        self
+    }
+
+    /// Sets the cutoff between normal file uploads and large file uploads.
+    ///
+    /// B2 allows for two different upload mechanisms, normal files and large
+    /// files. Normal files are uploaded in a single http request while
+    /// large files are uploading in multiple parts which can be uploaded in
+    /// parallel.
+    ///
+    /// This sets the desired cut-off between the different upload methods.
+    /// Trying to set this larger than the maximum size of normal files will
+    /// just use the maximum size of normal files. Trying to set this smaller
+    /// than the minimum size of large file parts will just use the minimum
+    /// size of large file parts.
+    pub fn limit_small_file_size(mut self, size: u64) -> B2BackendBuilder {
+        if size > TOTAL_MAX_SMALL_FILE_SIZE {
+            self.settings.max_small_file_size = TOTAL_MAX_SMALL_FILE_SIZE;
+        } else {
+            self.settings.max_small_file_size = size;
+        }
         self
     }
 
@@ -762,31 +1350,9 @@ impl StorageBackend for B2Backend {
             backend_prefix: ObjectPath,
             path: ObjectPath,
         ) -> StorageResult<Object> {
-            let mut file_part = backend_prefix.join(&path);
-            let bucket = match file_part.unshift_part() {
-                Some(b) => b,
-                None => return Err(error::not_found::<StorageError>(path, None)),
-            };
-
-            if file_part.is_empty() {
-                return Err(error::not_found::<StorageError>(path, None));
-            }
-
-            let request = ListBucketsRequest {
-                account_id: client.account_id().await?,
-                bucket_id: None,
-                bucket_name: Some(bucket),
-                bucket_types: Default::default(),
-            };
-
-            let mut buckets = client.b2_list_buckets(path.clone(), request).await?.buckets;
-            if buckets.len() != 1 {
-                return Err(error::not_found::<StorageError>(path, None));
-            }
-
-            let bucket = buckets.remove(0);
-
-            let file = file_part.to_string();
+            let (bucket, file) =
+                B2Backend::expand_path(client.clone(), backend_prefix.clone(), path.clone())
+                    .await?;
 
             let options = ListFileVersionsRequest {
                 bucket_id: bucket.bucket_id.clone(),
@@ -821,7 +1387,9 @@ impl StorageBackend for B2Backend {
             )));
         }
 
-        ObjectFuture::from_future(get(self.client(), self.settings.prefix.clone(), path))
+        let client = self.client();
+        let prefix = self.settings.prefix.clone();
+        ObjectFuture::from_future(get(client, prefix, path))
     }
 
     fn get_file_stream<O>(&self, reference: O) -> DataStreamFuture
@@ -906,15 +1474,61 @@ impl StorageBackend for B2Backend {
         OperationCompleteFuture::from_future(delete(self.clone(), reference))
     }
 
-    fn write_file_from_stream<S, I, E, P>(&self, _path: P, _stream: S) -> WriteCompleteFuture
+    fn write_file_from_stream<S, P>(&self, path: P, stream: S) -> WriteCompleteFuture
     where
-        S: Stream<Item = Result<I, E>> + Send + 'static,
-        I: IntoBuf + 'static,
-        E: 'static + std::error::Error + Send + Sync,
+        S: Stream<Item = StorageResult<Data>> + Send + 'static,
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>,
     {
-        unimplemented!();
+        async fn upload<S>(
+            client: B2Client,
+            max_small_file_size: u64,
+            prefix: ObjectPath,
+            path: ObjectPath,
+            stream: S,
+        ) -> Result<(), TransferError>
+        where
+            S: Stream<Item = StorageResult<Data>> + Send + 'static,
+        {
+            let (bucket, file) =
+                B2Backend::expand_path(client.clone(), prefix.clone(), path.clone())
+                    .await
+                    .map_err(TransferError::SourceError)?;
+
+            Uploader::upload(
+                client,
+                max_small_file_size,
+                path,
+                bucket.bucket_id,
+                file,
+                stream,
+            )
+            .await
+        }
+
+        let path = match path.try_into() {
+            Ok(t) => t,
+            Err(e) => {
+                return WriteCompleteFuture::from_value(Err(TransferError::TargetError(e.into())))
+            }
+        };
+
+        if path.is_dir_prefix() {
+            return WriteCompleteFuture::from_value(Err(TransferError::TargetError(
+                error::invalid_path(
+                    path,
+                    "Object paths cannot be empty or end with a '/' character.",
+                ),
+            )));
+        }
+
+        WriteCompleteFuture::from_future(upload(
+            self.client(),
+            self.settings.max_small_file_size,
+            self.settings.prefix.clone(),
+            path,
+            stream,
+        ))
     }
 }
 

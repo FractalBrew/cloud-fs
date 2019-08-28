@@ -5,9 +5,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
-use std::fs::{metadata, read, read_dir, remove_file, DirEntry};
+use std::fs::{metadata, read, read_dir, remove_file, DirEntry, File};
 use std::future::Future;
 use std::io;
+use std::io::{BufWriter, Write};
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -18,19 +19,21 @@ use futures::channel::oneshot::{channel, Sender};
 use futures::compat::*;
 use futures::future::{ready, TryFutureExt};
 use futures::lock::Mutex;
-use futures::stream::{iter, TryStreamExt};
+use futures::stream::{iter, StreamExt, TryStreamExt};
 use http::header;
+use http::header::HeaderMap;
 use http::request::Parts;
 use http::StatusCode;
 use hyper::server::Server;
 use hyper::service::service_fn;
 use hyper::{Body, Chunk, Request, Response};
 use serde_json::{from_slice, to_string_pretty};
+use sha1::Sha1;
 use uuid::Uuid;
 
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
-use storage_types::JSInt as Int;
+use storage_types::b2::v2::{percent_decode, BucketType, Int};
 
 use crate::runner::TestResult;
 
@@ -109,6 +112,31 @@ impl B2Error {
     {
         B2Error::new(StatusCode::BAD_REQUEST, "bad_request", message)
     }
+
+    fn request_timeout<D>(message: D) -> B2Error
+    where
+        D: Display,
+    {
+        B2Error::new(StatusCode::REQUEST_TIMEOUT, "request_timeout", message)
+    }
+
+    fn method_not_allowed<D>(message: D) -> B2Error
+    where
+        D: Display,
+    {
+        B2Error::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            message,
+        )
+    }
+
+    fn server_error<D>(message: D) -> B2Error
+    where
+        D: Display,
+    {
+        B2Error::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", message)
+    }
 }
 
 impl Display for B2Error {
@@ -172,6 +200,22 @@ impl<R> IntoPathError<R> for Result<R, io::Error> {
         P: AsRef<Path>,
     {
         self.map_err(|e| B2Error::path_error(path, e))
+    }
+}
+
+fn header_or_error(headers: &HeaderMap, name: &str) -> Result<String, B2Error> {
+    match headers.get(name) {
+        Some(val) => match val.to_str() {
+            Ok(s) => Ok(s.to_owned()),
+            Err(_) => Err(B2Error::invalid_parameters(format!(
+                "Header {} was invalid.",
+                name
+            ))),
+        },
+        None => Err(B2Error::invalid_parameters(format!(
+            "No header {} provided.",
+            name
+        ))),
     }
 }
 
@@ -347,9 +391,29 @@ impl Iterator for FileLister {
     }
 }
 
+struct LargeUpload {
+    file_name: String,
+    bucket_id: String,
+    auth: String,
+    parts: HashMap<usize, (Vec<Chunk>, String)>,
+}
+
+impl LargeUpload {
+    fn new(file_name: &str, bucket_id: &str) -> LargeUpload {
+        LargeUpload {
+            file_name: file_name.to_owned(),
+            bucket_id: bucket_id.to_owned(),
+            auth: Uuid::new_v4().to_string(),
+            parts: Default::default(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct B2ServerState {
     authorizations: HashMap<String, usize>,
+    upload_authorizations: HashMap<String, String>,
+    large_uploads: HashMap<String, LargeUpload>,
 }
 
 impl B2ServerState {
@@ -620,6 +684,334 @@ impl B2Server {
         }
     }
 
+    async fn b2_download_file(self, head: Parts) -> B2Result {
+        let path = match percent_decode(&head.uri.path()[15..]) {
+            Ok(s) => s,
+            Err(_) => return Err(B2Error::invalid_parameters("File path was invalid utf-8.")),
+        };
+
+        let mut file = self.root.clone();
+        file.push(path);
+
+        let meta = metadata(&file).into_path_err(&file)?;
+        if !meta.is_file() {
+            return Err(B2Error::not_found(&file));
+        }
+
+        let source = read(&file).into_path_err(file)?;
+        let mut len = source.len() / 5;
+        if len == 0 {
+            len = 1;
+        }
+
+        let blocks: Vec<io::Result<Chunk>> = source
+            .chunks(len)
+            .map(|s| {
+                let mut result: Vec<u8> = Default::default();
+                result.extend_from_slice(s);
+                io::Result::<Chunk>::Ok(result.into())
+            })
+            .collect();
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::wrap_stream(Compat::new(iter(blocks))))
+            .expect("Failed to build response."))
+    }
+
+    async fn b2_get_upload_url(self, _head: Parts, body: GetUploadUrlRequest) -> B2Result {
+        if !&body.bucket_id.starts_with(BUCKET_ID_PREFIX) {
+            return Err(B2Error::new(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                format!("Invalid bucket id: {}", body.bucket_id),
+            ));
+        }
+
+        let mut bucket = self.root.clone();
+        bucket.push(&body.bucket_id[BUCKET_ID_PREFIX.len()..]);
+
+        match metadata(bucket) {
+            Ok(meta) => {
+                if !meta.is_dir() {
+                    return Err(B2Error::new(
+                        StatusCode::BAD_REQUEST,
+                        "bad_request",
+                        format!("Invalid bucket id: {}", body.bucket_id),
+                    ));
+                }
+            }
+            Err(_) => {
+                return Err(B2Error::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    format!("Invalid bucket id: {}", body.bucket_id),
+                ));
+            }
+        }
+
+        let auth = Uuid::new_v4().to_string();
+        let mut state = self.state.lock().await;
+        state
+            .upload_authorizations
+            .insert(auth.clone(), body.bucket_id.clone());
+
+        api_response!(GetUploadUrlResponse {
+            upload_url: format!("http://{}/upload/file/{}", self.addr, body.bucket_id),
+            bucket_id: body.bucket_id,
+            authorization_token: auth,
+        })
+    }
+
+    async fn b2_upload_file(self, bucket_id: &str, head: Parts, body: Body) -> B2Result {
+        let file = match percent_decode(&header_or_error(&head.headers, "X-Bz-File-Name")?) {
+            Ok(s) => s,
+            Err(_) => return Err(B2Error::invalid_parameters("Filename was not valid utf-8.")),
+        };
+        let expected_sha1 = header_or_error(&head.headers, "X-Bz-Content-Sha1")?;
+        let expected_length: u64 = match header_or_error(&head.headers, "Content-Length")?.parse() {
+            Ok(len) => len,
+            Err(_) => {
+                return Err(B2Error::invalid_parameters(
+                    "Content-Length header could not be parsed.",
+                ))
+            }
+        };
+
+        let mut path = self.root.clone();
+        path.push(&bucket_id[BUCKET_ID_PREFIX.len()..]);
+        path.push(&file);
+        let mut writer = File::create(&path)?;
+
+        let mut stream = body.compat();
+        let mut length: Int = 0;
+        let mut hasher = Sha1::new();
+
+        loop {
+            match stream.next().await {
+                Some(Ok(chunk)) => {
+                    writer.write_all(&chunk)?;
+                    hasher.update(&chunk);
+                    length += chunk.len() as Int;
+                }
+                Some(Err(e)) => {
+                    return Err(B2Error::request_timeout(format!(
+                        "Failed to upload data: {}",
+                        e
+                    )))
+                }
+                None => break,
+            }
+        }
+
+        if length != expected_length {
+            return Err(B2Error::invalid_parameters(
+                "Content-Length header was not set correctly.",
+            ));
+        }
+
+        if expected_sha1 != hasher.hexdigest() {
+            return Err(B2Error::invalid_parameters(
+                "Expected hash did not match data.",
+            ));
+        }
+
+        api_response!(UploadFileResponse {
+            account_id: TEST_ACCOUNT_ID.to_owned(),
+            action: String::from("upload"),
+            bucket_id: bucket_id.to_owned(),
+            content_length: length,
+            content_sha1: Some(expected_sha1.to_owned()),
+            content_type: Some(String::from("application/octet-stream")),
+            file_id: Some(format!("{}", path.display())),
+            file_info: Default::default(),
+            file_name: file.to_owned(),
+            upload_timestamp: 0,
+        })
+    }
+
+    async fn b2_start_large_file(self, _head: Parts, body: StartLargeFileRequest) -> B2Result {
+        if !body.bucket_id.starts_with(BUCKET_ID_PREFIX) {
+            return Err(B2Error::invalid_bucket_id(&body.bucket_id));
+        }
+
+        let mut path = self.root.clone();
+        path.push(&body.bucket_id[BUCKET_ID_PREFIX.len()..]);
+        path.push(&body.file_name);
+
+        let file_id = format!("{}{}", FILE_ID_PREFIX, path.display());
+
+        let mut state = self.state.lock().await;
+        if state.large_uploads.contains_key(&file_id) {
+            return Err(B2Error::invalid_parameters(format!(
+                "File {} is already being uploaded.",
+                &body.file_name
+            )));
+        }
+
+        state.large_uploads.insert(
+            file_id.clone(),
+            LargeUpload::new(&body.file_name, &body.bucket_id),
+        );
+
+        api_response!(StartLargeFileResponse {
+            account_id: TEST_ACCOUNT_ID.to_owned(),
+            action: String::from("start"),
+            bucket_id: body.bucket_id,
+            content_length: 0,
+            content_sha1: None,
+            content_type: Some(body.content_type),
+            file_id: Some(file_id),
+            file_info: Default::default(),
+            file_name: body.file_name,
+            upload_timestamp: 0,
+        })
+    }
+
+    async fn b2_get_upload_part_url(self, _head: Parts, body: GetUploadPartUrlRequest) -> B2Result {
+        let state = self.state.lock().await;
+        match state.large_uploads.get(&body.file_id) {
+            Some(upload) => api_response!(GetUploadPartUrlResponse {
+                authorization_token: upload.auth.clone(),
+                file_id: body.file_id.clone(),
+                upload_url: format!("http://{}/upload/part/{}", self.addr, body.file_id),
+            }),
+            None => Err(B2Error::invalid_parameters("Unknown file id.")),
+        }
+    }
+
+    async fn b2_upload_part(self, file_id: String, head: Parts, body: Body) -> B2Result {
+        let expected_sha1 = header_or_error(&head.headers, "X-Bz-Content-Sha1")?;
+        let expected_length: u64 = match header_or_error(&head.headers, "Content-Length")?.parse() {
+            Ok(len) => len,
+            Err(_) => {
+                return Err(B2Error::invalid_parameters(
+                    "Content-Length header could not be parsed.",
+                ))
+            }
+        };
+        let part_number: usize = match header_or_error(&head.headers, "X-Bz-Part-Number")?.parse() {
+            Ok(len) => len,
+            Err(_) => {
+                return Err(B2Error::invalid_parameters(
+                    "X-Bz-Part-Number header could not be parsed.",
+                ))
+            }
+        };
+
+        if part_number < 1 {
+            return Err(B2Error::invalid_parameters(
+                "X-Bz-Part-Number header contained an invalid part number.",
+            ));
+        }
+
+        let mut stream = body.compat();
+        let mut length: Int = 0;
+        let mut hasher = Sha1::new();
+        let mut data: Vec<Chunk> = Default::default();
+
+        loop {
+            match stream.next().await {
+                Some(Ok(chunk)) => {
+                    hasher.update(&chunk);
+                    length += chunk.len() as Int;
+                    data.push(chunk);
+                }
+                Some(Err(e)) => {
+                    return Err(B2Error::request_timeout(format!(
+                        "Failed to upload data: {}",
+                        e
+                    )))
+                }
+                None => break,
+            }
+        }
+
+        if length != expected_length {
+            return Err(B2Error::invalid_parameters(
+                "Content-Length header was not set correctly.",
+            ));
+        }
+
+        if expected_sha1 != hasher.hexdigest() {
+            return Err(B2Error::invalid_parameters(
+                "Expected hash did not match data.",
+            ));
+        }
+
+        let mut state = self.state.lock().await;
+        let upload = match state.large_uploads.get_mut(&file_id) {
+            Some(u) => u,
+            None => {
+                return Err(B2Error::invalid_parameters(
+                    "Large upload already completed?",
+                ))
+            }
+        };
+
+        upload
+            .parts
+            .insert(part_number - 1, (data, expected_sha1.clone()));
+
+        api_response!(UploadPartResponse {
+            file_id,
+            part_number,
+            content_length: expected_length,
+            content_sha1: expected_sha1,
+            upload_timestamp: 0,
+        })
+    }
+
+    async fn b2_finish_large_file(self, _head: Parts, body: FinishLargeFileRequest) -> B2Result {
+        let mut upload = {
+            let mut state = self.state.lock().await;
+            match state.large_uploads.remove(&body.file_id) {
+                Some(upload) => upload,
+                None => return Err(B2Error::invalid_parameters("Unknown file id.")),
+            }
+        };
+
+        if upload.parts.len() != body.part_sha1_array.len() {
+            return Err(B2Error::invalid_parameters("Incorrect number of parts."));
+        }
+
+        let path = Path::new(&body.file_id[FILE_ID_PREFIX.len()..]);
+        let file = match File::create(path) {
+            Ok(f) => f,
+            Err(_) => return Err(B2Error::server_error("Failed to create file to write.")),
+        };
+        let mut writer = BufWriter::new(file);
+
+        let length = 0;
+        for i in 0..upload.parts.len() {
+            let (data, hash) = match upload.parts.remove(&i) {
+                Some(d) => d,
+                None => return Err(B2Error::invalid_parameters("Missing part.")),
+            };
+
+            if hash != body.part_sha1_array[i] {
+                return Err(B2Error::invalid_parameters("Invalid hash."));
+            }
+
+            for chunk in data {
+                writer.write_all(&chunk)?;
+            }
+        }
+
+        api_response!(FinishLargeFileResponse {
+            account_id: String::from(TEST_ACCOUNT_ID),
+            action: String::from("upload"),
+            bucket_id: upload.bucket_id,
+            content_length: length,
+            content_sha1: None,
+            content_type: None,
+            file_id: Some(body.file_id),
+            file_info: Default::default(),
+            file_name: upload.file_name,
+            upload_timestamp: 0,
+        })
+    }
+
     async fn check_auth(&self, auth: &str) -> Result<(), B2Error> {
         let mut state = self.state.lock().await;
         match state.authorizations.remove(auth) {
@@ -643,11 +1035,24 @@ impl B2Server {
         }
     }
 
+    async fn call_api(self, method: &str, head: Parts, data: Chunk) -> B2Result {
+        api_method!(b2_list_buckets, self, method, head, data);
+        api_method!(b2_list_file_names, self, method, head, data);
+        api_method!(b2_list_file_versions, self, method, head, data);
+        api_method!(b2_delete_file_version, self, method, head, data);
+        api_method!(b2_get_upload_url, self, method, head, data);
+        api_method!(b2_start_large_file, self, method, head, data);
+        api_method!(b2_get_upload_part_url, self, method, head, data);
+        api_method!(b2_finish_large_file, self, method, head, data);
+
+        Err(B2Error::invalid_parameters("Invalid API method requested."))
+    }
+
     async fn serve(self, request: Request<Body>) -> B2Result {
         let (head, body) = request.into_parts();
 
         let path = match head.uri.path_and_query() {
-            Some(p) => p.path(),
+            Some(p) => p.path().to_owned(),
             None => {
                 return Err(B2Error::invalid_parameters("Request contained no path."));
             }
@@ -680,44 +1085,68 @@ impl B2Server {
             let data = body.compat().try_concat().await.map_err(|e| {
                 B2Error::invalid_parameters(format!("Failed to receive entire body: {}", e))
             })?;
-
-            api_method!(b2_list_buckets, self, method, head, data);
-            api_method!(b2_list_file_names, self, method, head, data);
-            api_method!(b2_list_file_versions, self, method, head, data);
-            api_method!(b2_delete_file_version, self, method, head, data);
-
-            Err(B2Error::invalid_parameters("Invalid API method requested."))
+            self.call_api(method, head, data).await
         } else if path.starts_with("/download/file/") {
             self.check_auth(&auth).await?;
-
-            let path = &path[15..];
-            let mut file = self.root.clone();
-            file.push(path);
-
-            let meta = metadata(&file).into_path_err(&file)?;
-            if !meta.is_file() {
-                return Err(B2Error::not_found(&file));
+            self.b2_download_file(head).await
+        } else if path.starts_with("/upload/file/") {
+            if head.method != "POST" {
+                return Err(B2Error::method_not_allowed(
+                    "Only POST methods can upload files.",
+                ));
             }
 
-            let source = read(&file).into_path_err(file)?;
-            let mut len = source.len() / 5;
-            if len == 0 {
-                len = 1;
+            let bucket_id = path[13..].to_owned();
+            {
+                let state = self.state.lock().await;
+                match state.upload_authorizations.get(auth) {
+                    Some(valid_id) => {
+                        if valid_id != &bucket_id {
+                            return Err(B2Error::new(
+                                StatusCode::UNAUTHORIZED,
+                                "unauthorized",
+                                "Unknown auth token.",
+                            ));
+                        }
+                    }
+                    None => {
+                        return Err(B2Error::new(
+                            StatusCode::UNAUTHORIZED,
+                            "unauthorized",
+                            "Unknown auth token.",
+                        ));
+                    }
+                }
             }
 
-            let blocks: Vec<io::Result<Chunk>> = source
-                .chunks(len)
-                .map(|s| {
-                    let mut result: Vec<u8> = Default::default();
-                    result.extend_from_slice(s);
-                    io::Result::<Chunk>::Ok(result.into())
-                })
-                .collect();
+            self.b2_upload_file(&bucket_id, head, body).await
+        } else if path.starts_with("/upload/part/") {
+            if head.method != "POST" {
+                return Err(B2Error::method_not_allowed(
+                    "Only POST methods can upload parts.",
+                ));
+            }
 
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::wrap_stream(Compat::new(iter(blocks))))
-                .expect("Failed to build response."))
+            let file_id = path[13..].to_owned();
+            {
+                let state = self.state.lock().await;
+                let upload = match state.large_uploads.get(&file_id) {
+                    Some(upload) => upload,
+                    None => {
+                        return Err(B2Error::invalid_parameters("Unknown large file ID."));
+                    }
+                };
+
+                if auth != upload.auth {
+                    return Err(B2Error::new(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        "Unknown auth token.",
+                    ));
+                }
+            }
+
+            self.b2_upload_part(file_id, head, body).await
         } else {
             Err(B2Error::invalid_parameters("Invalid path requested."))
         }
