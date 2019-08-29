@@ -62,11 +62,6 @@ jobs:
     continueOnError: true
     pool:
       vmImage: ubuntu-16.04
-    env:
-      CI_NAME: azure
-      CI_BUILD_NUMBER: $(Build_BuildId)
-      CI_BUILD_URL: ${{ format('{0}{1}', 'https://dev.azure.com/dtownsend0397/file-store-rs/_build/results?buildId=', variables['Build.Build_BuildId']) }}
-      CI_BRANCH: $(Build.SourceBranchName)
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
@@ -79,6 +74,11 @@ jobs:
       - script: |
           cargo tarpaulin --ciserver azure --coveralls $BUILD_BUILDID --ignore-tests
         displayName: Measure coverage
+        env:
+          CI_NAME: azure
+          CI_BUILD_NUMBER: $(Build_BuildId)
+          CI_BUILD_URL: ${{ format('{0}{1}', 'https://dev.azure.com/dtownsend0397/file-store-rs/_build/results?buildId=', variables['Build.Build_BuildId']) }}
+          CI_BRANCH: $(Build.SourceBranchName)
 
   - job: tests
     displayName: Run tests
