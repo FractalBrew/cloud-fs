@@ -132,12 +132,12 @@ impl FileStore {
     /// along with their contents and replaced with a file). The rationale for
     /// this is that for network based backends not overwriting generally
     /// involves more API calls to check if something is there first. If you
-    /// care about overwriting, call [`get_object`](struct.StorageBackend.html#method.get_file)
+    /// care about overwriting, call [`get_object`](backends/trait.StorageBackend.html#method.get_file)
     /// first and check the result.
     ///
     /// If this operation fails there are no guarantees about the state of the
     /// file. If that is an issue then you should consider always calling
-    /// [`delete_object`](struct.StorageBackend.html#method.delete_object) after a
+    /// [`delete_object`](backends/trait.StorageBackend.html#method.delete_object) after a
     /// failure.
     ///
     /// The future returned will only resolve once all the data from the stream

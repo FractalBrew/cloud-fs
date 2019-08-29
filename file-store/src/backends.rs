@@ -105,33 +105,33 @@ pub(crate) enum BackendImplementation {
 
 /// The trait that every storage backend must implement at a minimum.
 pub trait StorageBackend: Clone + Send + 'static {
-    /// See [`backend_type`](../../struct.FileStore.html#method.backend_type).
+    /// See [`backend_type`](../struct.FileStore.html#method.backend_type).
     fn backend_type(&self) -> Backend;
 
-    /// See [`list_objects`](../../struct.FileStore.html#method.list_objects).
+    /// See [`list_objects`](../struct.FileStore.html#method.list_objects).
     fn list_objects<P>(&self, prefix: P) -> ObjectStreamFuture
     where
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>;
 
-    /// See [`list_directory`](../../struct.FileStore.html#method.list_directory).
+    /// See [`list_directory`](../struct.FileStore.html#method.list_directory).
     fn list_directory<P>(&self, dir: P) -> ObjectStreamFuture
     where
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>;
 
-    /// See [`get_object`](../../struct.FileStore.html#method.get_object).
+    /// See [`get_object`](../struct.FileStore.html#method.get_object).
     fn get_object<P>(&self, path: P) -> ObjectFuture
     where
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>;
 
-    /// See [`get_file_stream`](../../struct.FileStore.html#method.get_file_stream).
+    /// See [`get_file_stream`](../struct.FileStore.html#method.get_file_stream).
     fn get_file_stream<O>(&self, reference: O) -> DataStreamFuture
     where
         O: ObjectReference;
 
-    /// See [`copy_file`](../../struct.FileStore.html#method.copy_file).
+    /// See [`copy_file`](../struct.FileStore.html#method.copy_file).
     fn copy_file<O, P>(&self, reference: O, target: P) -> CopyCompleteFuture
     where
         O: ObjectReference,
@@ -142,7 +142,7 @@ pub trait StorageBackend: Clone + Send + 'static {
         self.write_file_from_stream(target, source)
     }
 
-    /// See [`move_file`](../../struct.FileStore.html#method.move_file).
+    /// See [`move_file`](../struct.FileStore.html#method.move_file).
     fn move_file<O, P>(&self, reference: O, target: P) -> MoveCompleteFuture
     where
         O: ObjectReference,
@@ -159,12 +159,12 @@ pub trait StorageBackend: Clone + Send + 'static {
         ))
     }
 
-    /// See [`delete_object`](../../struct.FileStore.html#method.delete_object).
+    /// See [`delete_object`](../struct.FileStore.html#method.delete_object).
     fn delete_object<O>(&self, reference: O) -> OperationCompleteFuture
     where
         O: ObjectReference;
 
-    /// See [`write_file_from_stream`](../../struct.FileStore.html#method.write_file_from_stream).
+    /// See [`write_file_from_stream`](../struct.FileStore.html#method.write_file_from_stream).
     fn write_file_from_stream<S, P>(&self, path: P, stream: S) -> WriteCompleteFuture
     where
         S: Stream<Item = StorageResult<Data>> + Send + 'static,
