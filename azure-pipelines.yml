@@ -2,7 +2,7 @@ trigger:
   - master
 
 variables:
-  toolchain: nightly
+  default_toolchain: nightly
 
 jobs:
   - job: clippy
@@ -13,7 +13,7 @@ jobs:
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
-          rust_version: $(toolchain)
+          rust_toolchain: $(default_toolchain)
       - script: |
           rustup component add clippy
           cargo clippy --version
@@ -30,7 +30,7 @@ jobs:
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
-          rust_version: $(toolchain)
+          rust_toolchain: $(default_toolchain)
       - script: |
           rustup component add rustfmt
           cargo fmt --version
@@ -47,7 +47,7 @@ jobs:
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
-          rust_version: $(toolchain)
+          rust_toolchain: $(default_toolchain)
       - script: |
           cargo install cargo-deadlinks
           cargo deadlinks --version
@@ -65,7 +65,7 @@ jobs:
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
-          rust_version: $(toolchain)
+          rust_toolchain: $(default_toolchain)
       - script: |
           cargo test --verbose --all
         displayName: Run tests
