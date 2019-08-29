@@ -37,7 +37,7 @@ jobs:
         displayName: Install rustfmt
       - script: |
           cargo fmt --all -- --check
-        displayName: Run clippy
+        displayName: Run rustfmt
 
   - job: docs
     displayName: Check docs
@@ -57,6 +57,23 @@ jobs:
           cargo deadlinks --dir target/doc/file_store
         displayName: Run clippy
 
+  - job: coverage
+    displayName: Generate code coverate
+    continueOnError: true
+    pool:
+      vmImage: ubuntu-16.04
+    steps:
+      - template: ci/azure-install-rust.yml
+        parameters:
+          rust_toolchain: $(default_toolchain)
+      - script: |
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --version
+        displayName: Install tarpaulin
+      - script: |
+          cargo tarpaulin --ciserver azure --coveralls $BUILD_BUILDID --ignore-tests
+        displayName: Measure coverage
+
   - job: tests
     displayName: Run tests
     continueOnError: true
@@ -67,5 +84,5 @@ jobs:
         parameters:
           rust_toolchain: $(default_toolchain)
       - script: |
-          cargo test --verbose --all
+          cargo test --all --release
         displayName: Run tests
