@@ -1,0 +1,71 @@
+trigger:
+  - master
+
+variables:
+  toolchain: nightly
+
+jobs:
+  - job: clippy
+    displayName: Lint code
+    continueOnError: true
+    pool:
+      vmImage: ubuntu-16.04
+    steps:
+      - template: azure-install-rust.yml
+        parameters:
+          rust_version: $(toolchain)
+      - displayName: Install clippy
+        script: |
+          rustup component add clippy
+          cargo clippy --version
+      - displayName: Run clippy
+        script: |
+          cargo -q clippy --all --all-features --message-format short --tests -- -D warnings
+
+  - job: rustfmt
+    displayName: Check code formatting
+    continueOnError: true
+    pool:
+      vmImage: ubuntu-16.04
+    steps:
+      - template: azure-install-rust.yml
+        parameters:
+          rust_version: $(toolchain)
+      - displayName: Install rustfmt
+        script: |
+          rustup component add rustfmt
+          cargo fmt --version
+      - displayName: Run clippy
+        script: |
+          cargo fmt --all -- --check
+
+  - job: docs
+    displayName: Check docs
+    continueOnError: true
+    pool:
+      vmImage: ubuntu-16.04
+    steps:
+      - template: azure-install-rust.yml
+        parameters:
+          rust_version: $(toolchain)
+      - displayName: Install deadlinks
+        script: |
+          cargo install cargo-deadlinks
+          cargo deadlinks --version
+      - displayName: Run clippy
+        script: |
+          cargo doc --no-deps
+          cargo deadlinks --dir target/doc/file_store
+
+  - job: tests
+    displayName: Run tests
+    continueOnError: true
+    pool:
+      vmImage: ubuntu-16.04
+    steps:
+      - template: azure-install-rust.yml
+        parameters:
+          rust_version: $(toolchain)
+      - displayName: Run tests
+        script: |
+          cargo test --verbose --all
