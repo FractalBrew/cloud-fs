@@ -62,11 +62,17 @@ jobs:
     continueOnError: true
     pool:
       vmImage: ubuntu-16.04
+    env:
+      CI_NAME: azure
+      CI_BUILD_NUMBER: $(Build_BuildId)
+      CI_BUILD_URL: ${{ format('{0}{1}', 'https://dev.azure.com/dtownsend0397/file-store-rs/_build/results?buildId=', variables['Build.Build_BuildId']) }}
+      CI_BRANCH: $(Build.SourceBranchName)
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
           rust_toolchain: $(default_toolchain)
       - script: |
+          cargo check --release
           cargo install cargo-tarpaulin
           cargo tarpaulin --version
         displayName: Install tarpaulin
@@ -77,8 +83,16 @@ jobs:
   - job: tests
     displayName: Run tests
     continueOnError: true
+    strategy:
+      matrix:
+        linux:
+          platform: "ubuntu-16.04"
+        mac:
+          platform: "macos-10.13"
+        windows:
+          platform: "vs2017-win2016"
     pool:
-      vmImage: ubuntu-16.04
+      vmImage: $(platform)
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
