@@ -22,7 +22,7 @@ cache: cargo
 
 script:
   - rustup component add clippy && cargo -q clippy --all --message-format short --tests -- -D warnings
-  - cargo test --verbose --all -- --test-threads 1
+  - cargo test --verbose --all
   - rustup component add rustfmt && cargo fmt --all -- --check
   - cargo doc --no-deps && cargo install cargo-deadlinks && cargo deadlinks --dir target/doc/file_store
 

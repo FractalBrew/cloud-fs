@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use futures::future::FutureExt;
 use tempfile::{tempdir, TempDir};
 use tokio::executor::spawn as tokio_spawn;
-use tokio::runtime::Runtime;
+use tokio::runtime::current_thread::Runtime;
 use tokio::sync::oneshot;
 
 use utils::*;
@@ -86,12 +86,8 @@ where
     F: Future + Send + 'static,
     F::Output: Send,
 {
-    let runtime = Runtime::new().unwrap();
-
-    let result = runtime.block_on(future);
-    runtime.shutdown_on_idle();
-
-    result
+    let mut runtime = Runtime::new().unwrap();
+    runtime.block_on(future)
 }
 
 /// Spawns a future on the existing runtime returning a future that resolves to
