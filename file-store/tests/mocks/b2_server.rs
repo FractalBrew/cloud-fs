@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Display;
 use std::fs::{metadata, read, read_dir, remove_file, DirEntry, File};
-use std::future::Future;
 use std::io;
 use std::io::{BufWriter, Write};
 use std::net::SocketAddr;
@@ -17,7 +16,7 @@ use std::sync::Arc;
 use base64::encode;
 use futures::channel::oneshot::{channel, Sender};
 use futures::compat::*;
-use futures::future::{ready, TryFutureExt};
+use futures::future::{ready, FutureExt, TryFutureExt};
 use futures::lock::Mutex;
 use futures::stream::{iter, StreamExt, TryStreamExt};
 use http::header;
@@ -27,8 +26,10 @@ use http::StatusCode;
 use hyper::server::Server;
 use hyper::service::service_fn;
 use hyper::{Body, Chunk, Request, Response};
+use old_futures::future::{ExecuteError, Executor, Future as OldFuture};
 use serde_json::{from_slice, to_string_pretty};
 use sha1::Sha1;
+use tokio::spawn;
 use uuid::Uuid;
 
 use storage_types::b2::v2::requests::*;
@@ -1153,10 +1154,23 @@ impl B2Server {
     }
 }
 
-pub fn build_server(
-    root: PathBuf,
-) -> TestResult<(SocketAddr, impl Future<Output = Result<(), ()>>, Sender<()>)> {
-    let (sender, receiver) = channel::<()>();
+#[derive(Clone)]
+struct Spawner;
+
+impl<F> Executor<F> for Spawner
+where
+    F: OldFuture<Item = (), Error = ()> + Send + 'static,
+{
+    fn execute(&self, future: F) -> Result<(), ExecuteError<F>> {
+        spawn(future.compat().map(|_| ()));
+
+        Ok(())
+    }
+}
+
+pub fn start_server(root: PathBuf) -> TestResult<(SocketAddr, Sender<()>)> {
+    let (shutdown_sender, shutdown_receiver) = channel::<()>();
+
     let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
     let listener = TcpListener::bind(addr).expect("Failed to bind to server socket.");
     let addr = listener
@@ -1171,6 +1185,7 @@ pub fn build_server(
 
     let http_server = Server::from_tcp(listener)
         .expect("Failed to attach to tcp stream.")
+        .executor(Spawner {})
         .serve(move || {
             let server = b2_server.clone();
             service_fn(move |req| {
@@ -1183,9 +1198,14 @@ pub fn build_server(
         });
 
     let server_future = http_server
-        .with_graceful_shutdown(receiver.compat())
+        .with_graceful_shutdown(shutdown_receiver.compat())
         .compat()
-        .map_err(|e| panic!(e.to_string()));
+        .map(|r| match r {
+            Ok(()) => (),
+            Err(e) => panic!(e.to_string()),
+        });
 
-    Ok((addr, server_future, sender))
+    spawn(server_future);
+
+    Ok((addr, shutdown_sender))
 }

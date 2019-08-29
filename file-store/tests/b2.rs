@@ -12,16 +12,13 @@ mod test1 {
 
     use file_store::backends::b2::B2Backend;
     use file_store::backends::Backend;
-    use file_store::executor::spawn;
     use file_store::FileStore;
 
-    use crate::mocks::b2_server::build_server;
+    use crate::mocks::b2_server::start_server;
     use crate::runner::{TestContext, TestError, TestResult};
 
     async fn build_fs(context: &TestContext) -> TestResult<(FileStore, Sender<()>)> {
-        let (addr, server, sender) = build_server(context.get_fs_root())?;
-
-        let _ = spawn(server);
+        let (addr, sender) = start_server(context.get_fs_root())?;
 
         let fs = B2Backend::builder("foo", "bar")
             .host(&format!("http://{}", addr))

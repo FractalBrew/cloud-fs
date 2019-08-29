@@ -3,11 +3,11 @@ mod commands;
 use std::path::Path;
 
 use clap::App;
+use tokio::runtime::Runtime;
 use yaml_rust::{Yaml, YamlLoader};
 
 use file_store::backends::b2::B2Backend;
 use file_store::backends::file::FileBackend;
-use file_store::executor::run;
 use file_store::ObjectPath;
 
 use commands::*;
@@ -87,8 +87,11 @@ fn main() {
         }
     };
 
-    match run(future).unwrap() {
+    let runtime = Runtime::new().unwrap();
+    match runtime.block_on(future) {
         Ok(()) => (),
         Err(e) => println!("{}", e),
     }
+
+    runtime.shutdown_on_idle();
 }

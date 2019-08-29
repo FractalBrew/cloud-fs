@@ -5,10 +5,15 @@ pub mod write;
 
 use std::fmt;
 use std::fs::create_dir_all;
+use std::future::Future;
 use std::iter::empty;
 use std::path::PathBuf;
 
+use futures::future::FutureExt;
 use tempfile::{tempdir, TempDir};
+use tokio::executor::spawn as tokio_spawn;
+use tokio::runtime::Runtime;
+use tokio::sync::oneshot;
 
 use utils::*;
 
@@ -73,6 +78,36 @@ where
     fn into_test_result(self) -> TestResult<O> {
         self.map_err(TestError::from_error)
     }
+}
+
+/// Runs a future on the existing runtime blocking until it completes.
+pub fn run<F>(future: F) -> F::Output
+where
+    F: Future + Send + 'static,
+    F::Output: Send,
+{
+    let runtime = Runtime::new().unwrap();
+
+    let result = runtime.block_on(future);
+    runtime.shutdown_on_idle();
+
+    result
+}
+
+/// Spawns a future on the existing runtime returning a future that resolves to
+/// its result.
+#[allow(dead_code)]
+pub fn spawn<F>(future: F) -> impl Future<Output = Result<F::Output, oneshot::error::RecvError>>
+where
+    F: Future + Send + 'static,
+    F::Output: Send,
+{
+    let (sender, receiver) = oneshot::channel::<F::Output>();
+    tokio_spawn(future.map(move |r| match sender.send(r) {
+        Ok(()) => (),
+        Err(_) => panic!("Failed to complete."),
+    }));
+    receiver
 }
 
 pub struct TestContext {
@@ -172,19 +207,17 @@ macro_rules! make_test {
     ($root:expr, $backend:expr, $pkg:ident, $name:ident, $setup:expr, $cleanup:expr) => {
         #[test]
         fn $name() {
-            let result: Result<crate::runner::TestResult<()>, std::sync::mpsc::TryRecvError> =
-                file_store::executor::run(async {
-                    let test_context = crate::runner::prepare_test($backend, $root)?;
-                    let (fs, backend_context) = $setup(&test_context).await?;
-                    crate::runner::$pkg::$name(&fs, &test_context).await?;
-                    $cleanup(backend_context).await?;
-                    Ok(())
-                });
+            let result: crate::runner::TestResult<()> = crate::runner::run(async {
+                let test_context = crate::runner::prepare_test($backend, $root)?;
+                let (fs, backend_context) = $setup(&test_context).await?;
+                crate::runner::$pkg::$name(&fs, &test_context).await?;
+                $cleanup(backend_context).await?;
+                Ok(())
+            });
 
             match result {
-                Ok(Ok(())) => (),
-                Ok(Err(error)) => panic!(error.to_string()),
-                Err(_e) => panic!("Failed to receive test result."),
+                Ok(()) => (),
+                Err(error) => panic!(error.to_string()),
             }
         }
     };

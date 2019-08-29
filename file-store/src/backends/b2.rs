@@ -40,7 +40,7 @@ use std::task::{Context, Poll};
 use base64::encode;
 use bytes::buf::FromBuf;
 use futures::compat::*;
-use futures::future::{ready, TryFutureExt};
+use futures::future::{ready, FutureExt, TryFutureExt};
 use futures::lock::Mutex;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::method::Method;
@@ -49,9 +49,11 @@ use hyper::client::connect::HttpConnector;
 use hyper::client::Client as HyperClient;
 use hyper::{Request, Response};
 use hyper_tls::HttpsConnector;
+use old_futures::future::{ExecuteError, Executor, Future as OldFuture};
 use serde::de::DeserializeOwned;
 use serde_json::{from_str, to_string};
 use sha1::Sha1;
+use tokio_executor::spawn;
 
 use storage_types::b2::v2::percent_encode;
 use storage_types::b2::v2::requests::*;
@@ -69,6 +71,20 @@ type StringFuture = WrappedFuture<StorageResult<String>>;
 const API_RETRIES: usize = 3;
 const TOTAL_MAX_SMALL_FILE_SIZE: u64 = 5 * 1000 * 1000 * 1000;
 const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 1000 * 1000 * 1000;
+
+#[derive(Clone)]
+struct Spawner;
+
+impl<F> Executor<F> for Spawner
+where
+    F: OldFuture<Item = (), Error = ()> + Send + 'static,
+{
+    fn execute(&self, future: F) -> Result<(), ExecuteError<F>> {
+        spawn(future.compat().map(|_| ()));
+
+        Ok(())
+    }
+}
 
 impl From<http::Error> for StorageError {
     fn from(error: http::Error) -> StorageError {
@@ -1219,7 +1235,7 @@ impl B2BackendBuilder {
                 }
             };
 
-            let client = HyperClient::builder().build(connector);
+            let client = HyperClient::builder().executor(Spawner {}).build(connector);
 
             let backend = B2Backend {
                 settings: self.settings,

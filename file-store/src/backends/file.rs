@@ -20,13 +20,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::BytesMut;
-use futures::compat::*;
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{once, Stream, StreamExt, TryStreamExt};
-use old_futures::prelude::{Async, Stream as OldStream};
 use tokio_fs::{read_dir, remove_dir, remove_file, symlink_metadata, DirEntry, File};
-use tokio_io::io::write_all;
-use tokio_io::AsyncRead as TokioAsyncRead;
+use tokio_io::{AsyncRead, AsyncWriteExt, BufReader};
 
 use super::{Backend, BackendImplementation, ObjectInternals, StorageBackend};
 use crate::filestore::FileStore;
@@ -34,8 +31,11 @@ use crate::types::error;
 use crate::types::stream::{MergedStreams, ResultStreamPoll};
 use crate::types::*;
 
-// How many bytes to attempt to read from a file at a time.
-const BUFFER_SIZE: usize = 20 * 1024 * 1024;
+// When reading from a file we start requesting INITIAL_BUFFER_SIZE bytes. As
+// data is read the available space is reduced until it reaches MIN_BUFFER_SIZE
+// at which point we allocate a new buffer of INITIAL_BUFFER_SIZE.
+const INITIAL_BUFFER_SIZE: usize = 20 * 1024 * 1024;
+const MIN_BUFFER_SIZE: usize = 1 * 1024 * 1024;
 
 fn get_storage_error(error: io::Error, path: ObjectPath) -> StorageError {
     match error.kind() {
@@ -107,9 +107,7 @@ fn directory_stream(
     ) -> StorageResult<impl Stream<Item = StorageResult<DirEntry>>> {
         let target = space.get_std_path(&path)?;
         Ok(wrap_stream(
-            wrap_future(read_dir(target.clone()).compat(), path.clone())
-                .await?
-                .compat(),
+            wrap_future(read_dir(target.clone()), path.clone()).await?,
             path,
         ))
     }
@@ -132,27 +130,25 @@ fn directory_stream(
             .and_then(move |direntry| {
                 let fname = direntry.file_name();
                 let mut path = path.clone();
-                wrap_future(symlink_metadata(direntry.path()).compat(), path.clone()).map(
-                    move |result| {
-                        let filename = match fname.into_string() {
-                            Ok(f) => f,
-                            Err(_) => {
-                                return Err(error::invalid_data::<StorageError>(
-                                    "Unable to convert OSString.",
-                                    None,
-                                ))
-                            }
-                        };
+                wrap_future(symlink_metadata(direntry.path()), path.clone()).map(move |result| {
+                    let filename = match fname.into_string() {
+                        Ok(f) => f,
+                        Err(_) => {
+                            return Err(error::invalid_data::<StorageError>(
+                                "Unable to convert OSString.",
+                                None,
+                            ))
+                        }
+                    };
 
-                        path.push_part(&filename);
-                        let maybe_meta = match result {
-                            Ok(m) => Some(m),
-                            Err(_) => None,
-                        };
+                    path.push_part(&filename);
+                    let maybe_meta = match result {
+                        Ok(m) => Some(m),
+                        Err(_) => None,
+                    };
 
-                        Ok((path, maybe_meta))
-                    },
-                )
+                    Ok((path, maybe_meta))
+                })
             })
             .right_stream()
     }
@@ -211,34 +207,70 @@ impl Stream for FileLister {
     }
 }
 
-struct FileReadStream {
+struct ReadStream<R>
+where
+    R: AsyncRead,
+{
     path: ObjectPath,
-    file: File,
+    reader: Pin<Box<R>>,
+    buffer: BytesMut,
 }
 
-impl FileReadStream {
-    fn build(path: ObjectPath, file: File) -> DataStream {
-        let stream = FileReadStream { path, file };
+impl<R> ReadStream<R>
+where
+    R: AsyncRead,
+{
+    fn build<T>(path: ObjectPath, reader: T) -> DataStream
+    where
+        T: AsyncRead + Send + 'static,
+    {
+        let buf_reader = BufReader::new(reader);
 
-        DataStream::from_stream(stream.compat())
+        let mut buffer = BytesMut::with_capacity(INITIAL_BUFFER_SIZE);
+        unsafe {
+            buffer.set_len(INITIAL_BUFFER_SIZE);
+            buf_reader.prepare_uninitialized_buffer(&mut buffer);
+        }
+
+        let stream = ReadStream {
+            path,
+            reader: Box::pin(buf_reader),
+            buffer,
+        };
+
+        DataStream::from_stream(stream)
+    }
+
+    fn inner_poll(&mut self, cx: &mut Context) -> ResultStreamPoll<Data> {
+        match self.reader.as_mut().poll_read(cx, &mut self.buffer) {
+            Poll::Ready(Ok(0)) => Poll::Ready(None),
+            Poll::Ready(Ok(size)) => {
+                let data = self.buffer.split_to(size);
+
+                if self.buffer.len() < MIN_BUFFER_SIZE {
+                    self.buffer = BytesMut::with_capacity(INITIAL_BUFFER_SIZE);
+                    unsafe {
+                        self.buffer.set_len(INITIAL_BUFFER_SIZE);
+                        self.reader.prepare_uninitialized_buffer(&mut self.buffer);
+                    }
+                }
+
+                Poll::Ready(Some(Ok(data.freeze())))
+            }
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(get_storage_error(e, self.path.clone())))),
+        }
     }
 }
 
-impl OldStream for FileReadStream {
-    type Item = Data;
-    type Error = StorageError;
+impl<R> Stream for ReadStream<R>
+where
+    R: AsyncRead,
+{
+    type Item = StorageResult<Data>;
 
-    fn poll(&mut self) -> StorageResult<Async<Option<Data>>> {
-        let mut buffer = BytesMut::with_capacity(BUFFER_SIZE);
-        match self.file.read_buf(&mut buffer) {
-            Ok(Async::Ready(0)) => Ok(Async::Ready(None)),
-            Ok(Async::Ready(size)) => {
-                buffer.split_off(size);
-                Ok(Async::Ready(Some(buffer.freeze())))
-            }
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(e) => Err(get_storage_error(e, self.path.clone())),
-        }
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<Data> {
+        self.inner_poll(cx)
     }
 }
 
@@ -259,16 +291,16 @@ async fn delete_directory(space: FileSpace, path: ObjectPath) -> StorageResult<(
 
     for file in nondirectories {
         let target = space.get_std_path(&file.path())?;
-        wrap_future(remove_file(target).compat(), file.path()).await?;
+        wrap_future(remove_file(target), file.path()).await?;
     }
 
     for dir in directories {
         let target = space.get_std_path(&dir.path())?;
-        wrap_future(remove_dir(target).compat(), dir.path()).await?;
+        wrap_future(remove_dir(target), dir.path()).await?;
     }
 
     let target = space.get_std_path(&path)?;
-    wrap_future(remove_dir(target).compat(), path).await
+    wrap_future(remove_dir(target), path).await
 }
 
 /// The backend implementation for local file storage. Only included when the
@@ -287,11 +319,8 @@ impl FileBackend {
     pub fn connect(root: &Path) -> ConnectFuture {
         let target = root.to_owned();
         ConnectFuture::from_future(async move {
-            let metadata = wrap_future(
-                symlink_metadata(target.clone()).compat(),
-                ObjectPath::empty(),
-            )
-            .await?;
+            let metadata =
+                wrap_future(symlink_metadata(target.clone()), ObjectPath::empty()).await?;
             if !metadata.is_dir() {
                 Err(error::invalid_settings::<StorageError>(
                     "Root path is not a directory.",
@@ -376,7 +405,7 @@ impl StorageBackend for FileBackend {
         async fn get(space: FileSpace, path: ObjectPath) -> StorageResult<Object> {
             let target = space.get_std_path(&path)?;
 
-            match symlink_metadata(target.clone()).compat().await {
+            match symlink_metadata(target.clone()).await {
                 Ok(m) => Ok(get_object(path, Some(m))),
                 Err(e) => {
                     if e.kind() == io::ErrorKind::NotFound {
@@ -410,14 +439,13 @@ impl StorageBackend for FileBackend {
         async fn read(space: FileSpace, path: ObjectPath) -> StorageResult<DataStream> {
             let target = space.get_std_path(&path)?;
 
-            let metadata =
-                wrap_future(symlink_metadata(target.clone()).compat(), path.clone()).await?;
+            let metadata = wrap_future(symlink_metadata(target.clone()), path.clone()).await?;
             if !metadata.is_file() {
                 return Err(error::not_found::<StorageError>(path, None));
             }
 
-            let file = wrap_future(File::open(target).compat(), path.clone()).await?;
-            Ok(FileReadStream::build(path, file))
+            let file = wrap_future(File::open(target), path.clone()).await?;
+            Ok(ReadStream::<File>::build(path, file))
         }
 
         match reference.into_path() {
@@ -432,11 +460,10 @@ impl StorageBackend for FileBackend {
     {
         async fn delete(space: FileSpace, path: ObjectPath) -> StorageResult<()> {
             let target = space.get_std_path(&path)?;
-            let metadata =
-                wrap_future(symlink_metadata(target.clone()).compat(), path.clone()).await?;
+            let metadata = wrap_future(symlink_metadata(target.clone()), path.clone()).await?;
 
             if !metadata.is_dir() {
-                wrap_future(remove_file(target.clone()).compat(), path.clone()).await
+                wrap_future(remove_file(target.clone()), path.clone()).await
             } else {
                 delete_directory(space, path).await
             }
@@ -466,14 +493,14 @@ impl StorageBackend for FileBackend {
                 .get_std_path(&path)
                 .map_err(TransferError::TargetError)?;
 
-            match symlink_metadata(target.clone()).compat().await {
+            match symlink_metadata(target.clone()).await {
                 Ok(m) => {
                     if m.is_dir() {
                         delete_directory(space, path.clone())
                             .await
                             .map_err(TransferError::TargetError)?;
                     } else {
-                        wrap_future(remove_file(target.clone()).compat(), path.clone())
+                        wrap_future(remove_file(target.clone()), path.clone())
                             .await
                             .map_err(TransferError::TargetError)?;
                     }
@@ -485,23 +512,49 @@ impl StorageBackend for FileBackend {
                 }
             };
 
-            let mut file = wrap_future(File::create(target).compat(), path.clone())
+            let mut file = wrap_future(File::create(target), path.clone())
                 .await
                 .map_err(TransferError::TargetError)?;
 
+            let mut pos = 0;
             loop {
+                println!("Polling for data at {}", pos);
                 let option = stream.next().await;
                 if let Some(result) = option {
                     let data = result.map_err(TransferError::SourceError)?;
-                    file = match write_all(file, data).compat().await {
-                        Ok((f, _)) => Ok(f),
-                        Err(e) => Err(TransferError::TargetError(get_storage_error(
-                            e,
-                            path.clone(),
-                        ))),
-                    }?;
+                    println!("Got {} bytes", data.len());
+                    match file.write_all(&data).await {
+                        Ok(()) => (),
+                        Err(e) => {
+                            return Err(TransferError::TargetError(get_storage_error(
+                                e,
+                                path.clone(),
+                            )))
+                        }
+                    };
+                    pos += data.len();
                 } else {
+                    println!("Finished at {}", pos);
                     break;
+                }
+            }
+
+            match file.flush().await {
+                Ok(()) => (),
+                Err(e) => {
+                    return Err(TransferError::TargetError(get_storage_error(
+                        e,
+                        path.clone(),
+                    )))
+                }
+            }
+            match file.shutdown().await {
+                Ok(()) => (),
+                Err(e) => {
+                    return Err(TransferError::TargetError(get_storage_error(
+                        e,
+                        path.clone(),
+                    )))
                 }
             }
 
