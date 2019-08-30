@@ -82,7 +82,7 @@ jobs:
 
   - job: tests
     displayName: Run tests
-    continueOnError: true
+    continueOnError: false
     strategy:
       matrix:
         linux:
