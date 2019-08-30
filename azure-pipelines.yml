@@ -85,18 +85,21 @@ jobs:
     continueOnError: false
     strategy:
       matrix:
-        linux:
+        linux-nightly:
           platform: "ubuntu-16.04"
-        mac:
+          toolchain: "nightly"
+        mac-nightly:
           platform: "macos-10.13"
-        windows:
+          toolchain: "nightly"
+        windows-nightly:
           platform: "vs2017-win2016"
+          toolchain: "nightly"
     pool:
       vmImage: $(platform)
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
-          rust_toolchain: $(default_toolchain)
+          rust_toolchain: $(toolchain)
       - script: |
           cargo test --all --release
         displayName: Run tests
