@@ -12,6 +12,7 @@ b2 = ["hyper", "hyper-tls", "base64", "http", "serde", "serde_json", "storage-ty
 [dependencies]
 futures-preview = { version = "=0.3.0-alpha.18", features = ["compat", "async-await"] }
 bytes = "^0.4.12"
+log = "^0.4.8"
 storage-types = { path = "../storage-types", optional = true }
 tokio-fs = { version = "=0.2.0-alpha.3", optional = true }
 tokio-io = { version = "=0.2.0-alpha.3", optional = true }

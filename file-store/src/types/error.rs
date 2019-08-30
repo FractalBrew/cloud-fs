@@ -3,6 +3,8 @@ use std::error;
 use std::fmt;
 use std::io;
 
+use log::error;
+
 use super::ObjectPath;
 
 /// The kind of an [`StorageError`](struct.StorageError.html).
@@ -260,6 +262,7 @@ pub fn internal_error<E>(detail: &str, error: Option<E>) -> StorageError
 where
     E: 'static + error::Error + Send + Sync,
 {
+    error!("An internal error occurred");
     StorageError {
         kind: StorageErrorKind::InternalError,
         detail: detail.to_owned(),

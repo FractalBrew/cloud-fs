@@ -55,6 +55,8 @@ fn build_yaml() -> Yaml {
 }
 
 fn main() {
+    env_logger::init();
+
     let yaml = build_yaml();
     let app_args = App::from_yaml(&yaml).get_matches();
 

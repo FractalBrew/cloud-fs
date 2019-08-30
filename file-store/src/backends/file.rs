@@ -22,7 +22,8 @@ use std::task::{Context, Poll};
 use bytes::BytesMut;
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{once, Stream, StreamExt, TryStreamExt};
-use tokio_fs::{read_dir, remove_dir, remove_file, symlink_metadata, DirEntry, File};
+use log::trace;
+use tokio_fs::DirEntry;
 use tokio_io::{AsyncRead, AsyncWriteExt, BufReader};
 
 use super::{Backend, BackendImplementation, ObjectInternals, StorageBackend};
@@ -36,6 +37,98 @@ use crate::types::*;
 // at which point we allocate a new buffer of INITIAL_BUFFER_SIZE.
 const INITIAL_BUFFER_SIZE: usize = 20 * 1024 * 1024;
 const MIN_BUFFER_SIZE: usize = 1 * 1024 * 1024;
+
+async fn read_dir<P>(path: P) -> io::Result<tokio_fs::ReadDir>
+where
+    P: AsRef<Path> + Send + 'static,
+{
+    let path = path.as_ref().to_owned();
+    let result = tokio_fs::read_dir(path.clone()).await;
+    match result {
+        Ok(_) => trace!("tokio_fs::read_dir {} success", path.display()),
+        Err(ref e) => trace!("tokio_fs::read_dir {} failed: {}", path.display(), e),
+    }
+
+    result
+}
+
+async fn remove_dir<P>(path: P) -> io::Result<()>
+where
+    P: AsRef<Path> + Send + 'static,
+{
+    let path = path.as_ref().to_owned();
+    let result = tokio_fs::remove_dir(path.clone()).await;
+    match result {
+        Ok(_) => trace!("tokio_fs::remove_dir {} success", path.display()),
+        Err(ref e) => trace!("tokio_fs::remove_dir {} failed: {}", path.display(), e),
+    }
+
+    result
+}
+
+async fn remove_file<P>(path: P) -> io::Result<()>
+where
+    P: AsRef<Path> + Send + 'static,
+{
+    let path = path.as_ref().to_owned();
+    let result = tokio_fs::remove_file(path.clone()).await;
+    match result {
+        Ok(_) => trace!("tokio_fs::remove_file {} success", path.display()),
+        Err(ref e) => trace!("tokio_fs::remove_file {} failed: {}", path.display(), e),
+    }
+
+    result
+}
+
+async fn symlink_metadata<P>(path: P) -> io::Result<Metadata>
+where
+    P: AsRef<Path> + Send + 'static,
+{
+    let path = path.as_ref().to_owned();
+    let result = tokio_fs::symlink_metadata(path.clone()).await;
+    match result {
+        Ok(_) => trace!("tokio_fs::symlink_metadata {} success", path.display()),
+        Err(ref e) => trace!(
+            "tokio_fs::symlink_metadata {} failed: {}",
+            path.display(),
+            e
+        ),
+    }
+
+    result
+}
+
+struct File {}
+
+impl File {
+    pub async fn open<P>(path: P) -> io::Result<tokio_fs::File>
+    where
+        P: AsRef<Path> + 'static,
+    {
+        let path = path.as_ref().to_owned();
+        let result = tokio_fs::File::open(path.clone()).await;
+        match result {
+            Ok(_) => trace!("tokio_fs::File::open {} success", path.display()),
+            Err(ref e) => trace!("tokio_fs::File::open {} failed: {}", path.display(), e),
+        }
+
+        result
+    }
+
+    pub async fn create<P>(path: P) -> io::Result<tokio_fs::File>
+    where
+        P: AsRef<Path> + 'static,
+    {
+        let path = path.as_ref().to_owned();
+        let result = tokio_fs::File::create(path.clone()).await;
+        match result {
+            Ok(_) => trace!("tokio_fs::File::create {} success", path.display()),
+            Err(ref e) => trace!("tokio_fs::File::create {} failed: {}", path.display(), e),
+        }
+
+        result
+    }
+}
 
 fn get_storage_error(error: io::Error, path: ObjectPath) -> StorageError {
     match error.kind() {
@@ -445,7 +538,7 @@ impl StorageBackend for FileBackend {
             }
 
             let file = wrap_future(File::open(target), path.clone()).await?;
-            Ok(ReadStream::<File>::build(path, file))
+            Ok(ReadStream::<tokio_fs::File>::build(path, file))
         }
 
         match reference.into_path() {

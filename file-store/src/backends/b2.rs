@@ -29,6 +29,7 @@
 //! upload began.
 use std::cmp::max;
 use std::convert::{TryFrom, TryInto};
+use std::fmt;
 use std::future::Future;
 use std::io::Read;
 use std::ops::Deref;
@@ -49,6 +50,7 @@ use hyper::client::connect::HttpConnector;
 use hyper::client::Client as HyperClient;
 use hyper::{Request, Response};
 use hyper_tls::HttpsConnector;
+use log::trace;
 use old_futures::future::{ExecuteError, Executor, Future as OldFuture};
 use serde::de::DeserializeOwned;
 use serde_json::{from_str, to_string};
@@ -214,7 +216,17 @@ impl B2Client {
         path: ObjectPath,
         request: Request<Body>,
     ) -> StorageResult<Response<Body>> {
-        let response = self.client.request(request).compat().await?;
+        trace!("Requesting {}", request.uri());
+        let response = match self.client.request(request).compat().await {
+            Ok(r) => {
+                trace!("{} b2 api call succeeded", method);
+                r
+            }
+            Err(e) => {
+                trace!("{} b2 api call failed: {}", method, e);
+                return Err(e.into());
+            }
+        };
 
         if response.status().is_success() {
             Ok(response)
@@ -236,7 +248,7 @@ impl B2Client {
         request: Request<Body>,
     ) -> StorageResult<R>
     where
-        R: DeserializeOwned,
+        R: DeserializeOwned + fmt::Debug,
     {
         let response = self.request(method, path, request).await?;
         let (_, body) = response.into_parts();
@@ -247,11 +259,17 @@ impl B2Client {
             .unwrap();
 
         match from_str(&data) {
-            Ok(r) => Ok(r),
-            Err(e) => Err(error::invalid_data(
-                &format!("Unable to parse response from {}.", method),
-                Some(e),
-            )),
+            Ok(r) => {
+                trace!("{} api method returned {:?}", method, r);
+                Ok(r)
+            }
+            Err(e) => {
+                trace!("{} api method failed: {}", method, e);
+                Err(error::invalid_data(
+                    &format!("Unable to parse response from {}.", method),
+                    Some(e),
+                ))
+            }
         }
     }
 
@@ -274,8 +292,8 @@ impl B2Client {
 
     async fn b2_api_call<S, Q>(self, method: &str, path: ObjectPath, request: S) -> StorageResult<Q>
     where
-        S: serde::ser::Serialize + Clone,
-        for<'de> Q: serde::de::Deserialize<'de>,
+        S: serde::ser::Serialize + Clone + fmt::Debug,
+        for<'de> Q: serde::de::Deserialize<'de> + fmt::Debug,
     {
         let mut tries: usize = 0;
         loop {
@@ -284,6 +302,7 @@ impl B2Client {
                 (session.api_url.clone(), session.authorization_token.clone())
             };
 
+            trace!("Starting {} api call with {:?}", method, request);
             let data = to_string(&request)?;
 
             let request = Request::builder()
@@ -1225,6 +1244,7 @@ impl B2BackendBuilder {
     /// this builder's settings.
     pub fn connect(self) -> ConnectFuture {
         ConnectFuture::from_future(async {
+            trace!("Connecting to B2 with settings {:?}", self.settings);
             let connector = match HttpsConnector::new(4) {
                 Ok(c) => c,
                 Err(e) => {
@@ -1285,8 +1305,7 @@ impl StorageBackend for B2Backend {
             prefix: ObjectPath,
         ) -> StorageResult<ObjectStream> {
             let mut file_part = backend_prefix.join(&prefix);
-            let is_dir = file_part.is_dir_prefix();
-            let bucket = file_part.unshift_part().unwrap_or_else(String::new);
+            let bucket = file_part.unshift_part();
 
             let mut request = ListBucketsRequest {
                 account_id: client.account_id().await?,
@@ -1295,18 +1314,19 @@ impl StorageBackend for B2Backend {
                 bucket_types: Default::default(),
             };
 
-            if !file_part.is_empty() || is_dir {
+            if let Some(ref bucket_name) = bucket {
                 // Only include the bucket named `bucket`.
-                request.bucket_name = Some(bucket.clone());
+                request.bucket_name = Some(bucket_name.clone());
             }
 
-            let path = ObjectPath::new(&bucket)?;
+            let bucket_name = bucket.unwrap_or_else(String::new);
+            let path = ObjectPath::new(bucket_name.clone())?;
             let listers = client
                 .b2_list_buckets(path, request)
                 .await?
                 .buckets
                 .drain(..)
-                .filter(|b| b.bucket_name.starts_with(&bucket))
+                .filter(|b| b.bucket_name.starts_with(&bucket_name))
                 .map(move |b| {
                     let options = ListFileVersionsRequest {
                         bucket_id: b.bucket_id.clone(),
@@ -1479,7 +1499,7 @@ impl StorageBackend for B2Backend {
                         return Err(error::internal_error::<StorageError>(
                             "Expected object to have a file id.",
                             None,
-                        ))
+                        ));
                     }
                 }
             }
@@ -1552,12 +1572,14 @@ fn generate_error(method: &str, path: &ObjectPath, response: &str) -> StorageErr
     let error: ErrorResponse = match from_str(response) {
         Ok(r) => r,
         Err(e) => {
+            trace!("Unable to parse ErrorResponse structure from {}.", response);
             return error::invalid_data(
                 &format!("Unable to parse error response from {}.", method),
                 Some(e),
-            )
+            );
         }
     };
+    trace!("Found {:?}", error);
 
     match (method, error.status, error.code.as_str()) {
         ("b2_authorize_account", 401, "bad_auth_token") => error::access_denied::<StorageError>(
