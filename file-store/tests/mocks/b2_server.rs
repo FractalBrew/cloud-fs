@@ -644,7 +644,7 @@ impl B2Server {
         _head: Parts,
         body: DeleteFileVersionRequest,
     ) -> B2Result {
-        if !body.file_id.starts_with(FILE_ID_PREFIX) || !body.file_id.ends_with(&body.file_name) {
+        if !body.file_id.starts_with(FILE_ID_PREFIX) {
             return Err(B2Error::new(
                 StatusCode::BAD_REQUEST,
                 "file_not_present",
