@@ -83,6 +83,7 @@ fn main() {
 
     let future = match backend_args.subcommand() {
         ("ls", Some(args)) => ls(fsfuture, args),
+        ("put", Some(args)) => put(fsfuture, args),
         _ => {
             println!("You must choose a command.\n{}", app_args.usage());
             return;

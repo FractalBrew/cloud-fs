@@ -20,9 +20,9 @@
 
 #[macro_use]
 pub mod backends;
-//pub mod executor;
 mod filestore;
 mod types;
+pub mod utils;
 
 pub use filestore::FileStore;
 pub use types::*;

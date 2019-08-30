@@ -1,34 +1,85 @@
-use clap::ArgMatches;
-use futures::future::{ready, Future, TryFutureExt};
-use futures::stream::TryStreamExt;
+use std::fmt;
 
-use file_store::{ConnectFuture, ObjectPath, StorageResult};
+use clap::ArgMatches;
+use futures::future::{ready, BoxFuture};
+use futures::stream::TryStreamExt;
+use tokio::io::{stdin, Stdin};
+
+use file_store::utils::ReaderStream;
+use file_store::{ConnectFuture, ObjectPath, StorageError, TransferError};
+
+#[derive(Debug)]
+pub struct ErrorResult {
+    message: String,
+}
+
+impl fmt::Display for ErrorResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.pad(&self.message)
+    }
+}
+
+impl From<StorageError> for ErrorResult {
+    fn from(error: StorageError) -> ErrorResult {
+        ErrorResult {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<TransferError> for ErrorResult {
+    fn from(error: TransferError) -> ErrorResult {
+        match error {
+            TransferError::SourceError(e) => ErrorResult {
+                message: e.to_string(),
+            },
+            TransferError::TargetError(e) => ErrorResult {
+                message: e.to_string(),
+            },
+        }
+    }
+}
 
 pub fn ls(
     connect: ConnectFuture,
     args: &ArgMatches<'_>,
-) -> impl Future<Output = StorageResult<()>> {
+) -> BoxFuture<'static, Result<(), ErrorResult>> {
     let prefix_arg = args.value_of("prefix").map(String::from);
 
-    connect.and_then(move |fs| {
-        async move {
-            let prefix = match prefix_arg {
-                Some(p) => ObjectPath::new(p)?,
-                None => ObjectPath::empty(),
-            };
+    Box::pin(async move {
+        let fs = connect.await?;
+        let prefix = match prefix_arg {
+            Some(p) => ObjectPath::new(p)?,
+            None => ObjectPath::empty(),
+        };
 
-            let stream = fs.list_objects(prefix).await?;
-            stream
-                .try_for_each(|object| {
-                    println!(
-                        "{:8}{:5} {}",
-                        object.object_type(),
-                        object.size(),
-                        object.path()
-                    );
-                    ready(Ok(()))
-                })
-                .await
-        }
+        let stream = fs.list_objects(prefix).await?;
+        stream
+            .try_for_each(|object| {
+                println!(
+                    "{:8}{:5} {}",
+                    object.object_type(),
+                    object.size(),
+                    object.path()
+                );
+                ready(Ok(()))
+            })
+            .await?;
+        Ok(())
+    })
+}
+
+pub fn put(
+    connect: ConnectFuture,
+    args: &ArgMatches<'_>,
+) -> BoxFuture<'static, Result<(), ErrorResult>> {
+    let path = args.value_of("PATH").map(String::from).unwrap();
+
+    Box::pin(async move {
+        let fs = connect.await?;
+        let path = ObjectPath::new(path)?;
+        let stream = ReaderStream::<Stdin>::stream(stdin(), 1000000, 500000);
+        fs.write_file_from_stream(path, stream).await?;
+        Ok(())
     })
 }

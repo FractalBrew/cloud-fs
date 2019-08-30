@@ -19,18 +19,18 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::BytesMut;
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{once, Stream, StreamExt, TryStreamExt};
 use log::trace;
 use tokio_fs::DirEntry;
-use tokio_io::{AsyncRead, AsyncWriteExt, BufReader};
+use tokio_io::AsyncWriteExt;
 
 use super::{Backend, BackendImplementation, ObjectInternals, StorageBackend};
 use crate::filestore::FileStore;
 use crate::types::error;
 use crate::types::stream::{MergedStreams, ResultStreamPoll};
 use crate::types::*;
+use crate::utils::ReaderStream;
 
 // When reading from a file we start requesting INITIAL_BUFFER_SIZE bytes. As
 // data is read the available space is reduced until it reaches MIN_BUFFER_SIZE
@@ -300,73 +300,6 @@ impl Stream for FileLister {
     }
 }
 
-struct ReadStream<R>
-where
-    R: AsyncRead,
-{
-    path: ObjectPath,
-    reader: Pin<Box<R>>,
-    buffer: BytesMut,
-}
-
-impl<R> ReadStream<R>
-where
-    R: AsyncRead,
-{
-    fn build<T>(path: ObjectPath, reader: T) -> DataStream
-    where
-        T: AsyncRead + Send + 'static,
-    {
-        let buf_reader = BufReader::new(reader);
-
-        let mut buffer = BytesMut::with_capacity(INITIAL_BUFFER_SIZE);
-        unsafe {
-            buffer.set_len(INITIAL_BUFFER_SIZE);
-            buf_reader.prepare_uninitialized_buffer(&mut buffer);
-        }
-
-        let stream = ReadStream {
-            path,
-            reader: Box::pin(buf_reader),
-            buffer,
-        };
-
-        DataStream::from_stream(stream)
-    }
-
-    fn inner_poll(&mut self, cx: &mut Context) -> ResultStreamPoll<Data> {
-        match self.reader.as_mut().poll_read(cx, &mut self.buffer) {
-            Poll::Ready(Ok(0)) => Poll::Ready(None),
-            Poll::Ready(Ok(size)) => {
-                let data = self.buffer.split_to(size);
-
-                if self.buffer.len() < MIN_BUFFER_SIZE {
-                    self.buffer = BytesMut::with_capacity(INITIAL_BUFFER_SIZE);
-                    unsafe {
-                        self.buffer.set_len(INITIAL_BUFFER_SIZE);
-                        self.reader.prepare_uninitialized_buffer(&mut self.buffer);
-                    }
-                }
-
-                Poll::Ready(Some(Ok(data.freeze())))
-            }
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(get_storage_error(e, self.path.clone())))),
-        }
-    }
-}
-
-impl<R> Stream for ReadStream<R>
-where
-    R: AsyncRead,
-{
-    type Item = StorageResult<Data>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<Data> {
-        self.inner_poll(cx)
-    }
-}
-
 #[allow(clippy::needless_lifetimes)]
 async fn delete_directory(space: FileSpace, path: ObjectPath) -> StorageResult<()> {
     let mut dir_path = path.clone();
@@ -538,7 +471,10 @@ impl StorageBackend for FileBackend {
             }
 
             let file = wrap_future(File::open(target), path.clone()).await?;
-            Ok(ReadStream::<tokio_fs::File>::build(path, file))
+            Ok(DataStream::from_stream(
+                ReaderStream::<tokio_fs::File>::stream(file, INITIAL_BUFFER_SIZE, MIN_BUFFER_SIZE)
+                    .map_err(move |e| get_storage_error(e, path.clone())),
+            ))
         }
 
         match reference.into_path() {

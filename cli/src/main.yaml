@@ -37,3 +37,10 @@ commands:
         - prefix:
             help: Only list files with this prefix.
             takes_value: true
+  - put:
+      about: Accepts data from stdin and stores it in the given path.
+      args:
+        - PATH:
+            help: The path to store at.
+            required: true
+            index: 1
