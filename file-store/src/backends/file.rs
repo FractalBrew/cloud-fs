@@ -35,8 +35,9 @@ use crate::utils::ReaderStream;
 // When reading from a file we start requesting INITIAL_BUFFER_SIZE bytes. As
 // data is read the available space is reduced until it reaches MIN_BUFFER_SIZE
 // at which point we allocate a new buffer of INITIAL_BUFFER_SIZE.
-const INITIAL_BUFFER_SIZE: usize = 20 * 1024 * 1024;
-const MIN_BUFFER_SIZE: usize = 1 * 1024 * 1024;
+const MB: usize = 1024 * 1024;
+const INITIAL_BUFFER_SIZE: usize = 20 * MB;
+const MIN_BUFFER_SIZE: usize = MB;
 
 async fn read_dir<P>(path: P) -> io::Result<tokio_fs::ReadDir>
 where

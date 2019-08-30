@@ -99,9 +99,10 @@ where
     F::Output: Send,
 {
     let (sender, receiver) = oneshot::channel::<F::Output>();
-    tokio_spawn(future.map(move |r| match sender.send(r) {
-        Ok(()) => (),
-        Err(_) => panic!("Failed to complete."),
+    tokio_spawn(future.map(move |r| {
+        if sender.send(r).is_err() {
+            panic!("Failed to complete.")
+        }
     }));
     receiver
 }

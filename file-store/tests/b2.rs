@@ -1,5 +1,4 @@
 #![cfg(feature = "b2")]
-#![allow(clippy::needless_lifetimes)]
 
 extern crate file_store;
 

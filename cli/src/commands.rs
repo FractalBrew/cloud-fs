@@ -87,7 +87,7 @@ pub fn put(
     Box::pin(async move {
         let fs = connect.await?;
         let path = ObjectPath::new(path)?;
-        let stream = ReaderStream::<Stdin>::stream(stdin(), 1000000, 500000);
+        let stream = ReaderStream::<Stdin>::stream(stdin(), 1_000_000, 500_000);
         fs.write_file_from_stream(path, stream).await?;
         Ok(())
     })
