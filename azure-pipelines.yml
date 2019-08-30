@@ -20,7 +20,7 @@ jobs:
           cargo clippy --version
         displayName: Install clippy
       - script: |
-          cargo -q clippy --all --all-features --message-format short --tests -- -D warnings
+          cargo -q clippy --all-targets --all-features --message-format short -- -D warnings
         displayName: Run clippy
 
   - job: rustfmt
