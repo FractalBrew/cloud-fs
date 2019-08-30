@@ -546,13 +546,10 @@ impl StorageBackend for FileBackend {
                 .await
                 .map_err(TransferError::TargetError)?;
 
-            let mut pos = 0;
             loop {
-                println!("Polling for data at {}", pos);
                 let option = stream.next().await;
                 if let Some(result) = option {
                     let data = result.map_err(TransferError::SourceError)?;
-                    println!("Got {} bytes", data.len());
                     match file.write_all(&data).await {
                         Ok(()) => (),
                         Err(e) => {
@@ -562,9 +559,7 @@ impl StorageBackend for FileBackend {
                             )))
                         }
                     };
-                    pos += data.len();
                 } else {
-                    println!("Finished at {}", pos);
                     break;
                 }
             }
