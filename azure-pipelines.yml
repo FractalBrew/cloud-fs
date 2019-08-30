@@ -56,7 +56,7 @@ jobs:
       - script: |
           cargo doc --no-deps
           cargo deadlinks --dir target/doc/file_store
-        displayName: Run clippy
+        displayName: Check docs
 
   - job: coverage
     displayName: Generate code coverage
@@ -70,7 +70,7 @@ jobs:
       - script: |
           git checkout $BRANCH
           git reset --hard $CHANGESET
-          git show --oneline
+          git log -n 1 --oneline
         displayName: Set correct branch name
         env:
           BRANCH: $(Build.SourceBranchName)
@@ -80,22 +80,13 @@ jobs:
           cargo tarpaulin --version
         displayName: Install tarpaulin
       - script: |
-          env
-        displayName: Check environment
-        env:
-          CI_NAME: azure
-          CI_BUILD_NUMBER: $(Build.BuildId)
-          CI_JOB_ID: $(Build.BuildId)
-          CI_BUILD_URL: ${{ format('https://dev.azure.com/FractalBrew/{0}/_build/results?buildId={1}', variables['System.TeamProjectId'], variables['Build.Build_BuildId']) }}
-          CI_BRANCH: $(Build.SourceBranchName)
-      - script: |
-          cargo tarpaulin --debug --release --ciserver azure --coveralls $COVERALLS_TOKEN --ignore-tests
+          cargo tarpaulin --release --ciserver azure --coveralls $COVERALLS_TOKEN --ignore-tests
         displayName: Measure branch coverage
         env:
           CI_NAME: azure
           CI_BUILD_NUMBER: $(Build.BuildId)
           CI_JOB_ID: $(Build.BuildId)
-          CI_BUILD_URL: ${{ format('https://dev.azure.com/FractalBrew/{0}/_build/results?buildId={1}', variables['System.TeamProjectId'], variables['Build.Build_BuildId']) }}
+          CI_BUILD_URL: ${{ format('{0}/{1}/_build/results?buildId={2}', variables['System.CollectionUri'], variables['System.TeamProjectId'], variables['Build.BuildId']) }}
           CI_BRANCH: $(Build.SourceBranchName)
           COVERALLS_TOKEN: $(coveralls_token)
 
