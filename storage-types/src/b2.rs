@@ -18,12 +18,24 @@ pub mod v2 {
 
     /// The set of characters to percent encode.
     ///
-    /// B2 docs approve of encoding absolutely everything but the `/` cannot be
-    /// encoded in paths so this takes the conservative approach and encodes
-    /// everything except alpha-numeric characters and the `/` character.
-    /// Encoding spaces as `%20` is fine even though B2 will return spaces
-    /// encoded as `+`.
-    const ENCODE_SET: AsciiSet = NON_ALPHANUMERIC.remove(b'/');
+    /// The B2 docs lie. Must use the correct set.
+    const ENCODE_SET: AsciiSet = NON_ALPHANUMERIC
+        .remove(b'/')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'-')
+        .remove(b'/')
+        .remove(b'~')
+        .remove(b'!')
+        .remove(b'$')
+        .remove(b'\'')
+        .remove(b'(')
+        .remove(b')')
+        .remove(b'*')
+        .remove(b';')
+        .remove(b'=')
+        .remove(b':')
+        .remove(b'@');
 
     pub fn percent_decode(value: &str) -> Result<String, Utf8Error> {
         // Must first convert `+` characters back to spaces.

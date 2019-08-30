@@ -1432,7 +1432,7 @@ impl StorageBackend for B2Backend {
     where
         O: ObjectReference,
     {
-        let mut path = match reference.into_path() {
+        let path = match reference.into_path() {
             Ok(p) => p,
             Err(e) => return DataStreamFuture::from_value(Err(e)),
         };
@@ -1444,21 +1444,20 @@ impl StorageBackend for B2Backend {
             )));
         }
 
-        let requested = path.clone();
-        let bucket = match path.unshift_part() {
+        let mut file_name = self.settings.prefix.join(&path);
+        let bucket = match file_name.unshift_part() {
             Some(b) => b,
             _ => {
                 return DataStreamFuture::from_value(Err(error::invalid_path(
                     path,
-                    "Object paths cannot be empty or end with a '/' character.",
+                    "Object paths cannot be empty.",
                 )));
             }
         };
 
-        let file = path.to_string();
         let future = self
             .client()
-            .b2_download_file_by_name(requested, bucket, file)
+            .b2_download_file_by_name(path, bucket, file_name.to_string())
             .map_ok(|body| {
                 DataStream::from_stream(body.compat().map(|result| match result {
                     Ok(chunk) => Result::<Data, StorageError>::Ok(chunk.into_bytes()),

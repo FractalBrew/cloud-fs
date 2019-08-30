@@ -1,9 +1,10 @@
 use std::fmt;
+use std::io;
 
 use clap::ArgMatches;
 use futures::future::{ready, BoxFuture};
-use futures::stream::TryStreamExt;
-use tokio::io::{stdin, Stdin};
+use futures::stream::{StreamExt, TryStreamExt};
+use tokio::io::{stdin, stdout, AsyncWriteExt, Stdin};
 
 use file_store::utils::ReaderStream;
 use file_store::{ConnectFuture, ObjectPath, StorageError, TransferError};
@@ -21,6 +22,14 @@ impl fmt::Display for ErrorResult {
 
 impl From<StorageError> for ErrorResult {
     fn from(error: StorageError) -> ErrorResult {
+        ErrorResult {
+            message: error.to_string(),
+        }
+    }
+}
+
+impl From<io::Error> for ErrorResult {
+    fn from(error: io::Error) -> ErrorResult {
         ErrorResult {
             message: error.to_string(),
         }
@@ -81,5 +90,29 @@ pub fn put(
         let stream = ReaderStream::<Stdin>::stream(stdin(), 1000000, 500000);
         fs.write_file_from_stream(path, stream).await?;
         Ok(())
+    })
+}
+
+pub fn cat(
+    connect: ConnectFuture,
+    args: &ArgMatches<'_>,
+) -> BoxFuture<'static, Result<(), ErrorResult>> {
+    let path = args.value_of("PATH").map(String::from).unwrap();
+
+    Box::pin(async move {
+        let fs = connect.await?;
+        let path = ObjectPath::new(path)?;
+
+        let mut stream = fs.get_file_stream(path).await?;
+        let mut stdout = stdout();
+        loop {
+            match stream.next().await {
+                Some(Ok(data)) => {
+                    stdout.write_all(&data).await?;
+                }
+                Some(Err(e)) => return Err(e.into()),
+                None => return Ok(()),
+            }
+        }
     })
 }

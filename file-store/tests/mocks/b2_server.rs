@@ -685,8 +685,8 @@ impl B2Server {
         }
     }
 
-    async fn b2_download_file(self, head: Parts) -> B2Result {
-        let path = match percent_decode(&head.uri.path()[15..]) {
+    async fn b2_download_file(self, path: &str) -> B2Result {
+        let path = match percent_decode(path) {
             Ok(s) => s,
             Err(_) => return Err(B2Error::invalid_parameters("File path was invalid utf-8.")),
         };
@@ -1088,8 +1088,9 @@ impl B2Server {
             })?;
             self.call_api(method, head, data).await
         } else if path.starts_with("/download/file/") {
+            let target = &path[15..];
             self.check_auth(&auth).await?;
-            self.b2_download_file(head).await
+            self.b2_download_file(target).await
         } else if path.starts_with("/upload/file/") {
             if head.method != "POST" {
                 return Err(B2Error::method_not_allowed(

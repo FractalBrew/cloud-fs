@@ -44,3 +44,10 @@ commands:
             help: The path to store at.
             required: true
             index: 1
+  - cat:
+      about: Retrieves a file and outputs it to stdout.
+      args:
+        - PATH:
+            help: The path to retrieve.
+            required: true
+            index: 1
