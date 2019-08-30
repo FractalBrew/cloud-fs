@@ -68,18 +68,36 @@ jobs:
         parameters:
           rust_toolchain: $(default_toolchain)
       - script: |
-          cargo check --release
+          git checkout $BRANCH
+          git reset --hard $CHANGESET
+          git show --oneline
+        displayName: Set correct branch name
+        env:
+          BRANCH: $(Build.SourceBranchName)
+          CHANGESET: $(Build.SourceVersion)
+      - script: |
           cargo install cargo-tarpaulin
           cargo tarpaulin --version
         displayName: Install tarpaulin
       - script: |
-          cargo tarpaulin --ciserver azure --coveralls $BUILD_BUILDID --ignore-tests
-        displayName: Measure coverage
+          env
+        displayName: Check environment
         env:
           CI_NAME: azure
-          CI_BUILD_NUMBER: $(Build_BuildId)
-          CI_BUILD_URL: ${{ format('{0}{1}', 'https://dev.azure.com/dtownsend0397/file-store-rs/_build/results?buildId=', variables['Build.Build_BuildId']) }}
+          CI_BUILD_NUMBER: $(Build.BuildId)
+          CI_JOB_ID: $(Build.BuildId)
+          CI_BUILD_URL: ${{ format('https://dev.azure.com/FractalBrew/{0}/_build/results?buildId={1}', variables['System.TeamProjectId'], variables['Build.Build_BuildId']) }}
           CI_BRANCH: $(Build.SourceBranchName)
+      - script: |
+          cargo tarpaulin --debug --release --ciserver azure --coveralls $COVERALLS_TOKEN --ignore-tests
+        displayName: Measure branch coverage
+        env:
+          CI_NAME: azure
+          CI_BUILD_NUMBER: $(Build.BuildId)
+          CI_JOB_ID: $(Build.BuildId)
+          CI_BUILD_URL: ${{ format('https://dev.azure.com/FractalBrew/{0}/_build/results?buildId={1}', variables['System.TeamProjectId'], variables['Build.Build_BuildId']) }}
+          CI_BRANCH: $(Build.SourceBranchName)
+          COVERALLS_TOKEN: $(coveralls_token)
 
   - job: tests
     displayName: Run tests
