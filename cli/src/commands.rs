@@ -116,3 +116,17 @@ pub fn cat(
         }
     })
 }
+
+pub fn rm(
+    connect: ConnectFuture,
+    args: &ArgMatches<'_>,
+) -> BoxFuture<'static, Result<(), ErrorResult>> {
+    let path = args.value_of("PATH").map(String::from).unwrap();
+
+    Box::pin(async move {
+        let fs = connect.await?;
+        let path = ObjectPath::new(path)?;
+
+        Ok(fs.delete_object(path).await?)
+    })
+}

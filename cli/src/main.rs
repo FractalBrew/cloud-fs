@@ -85,6 +85,7 @@ fn main() {
         ("ls", Some(args)) => ls(fsfuture, args),
         ("put", Some(args)) => put(fsfuture, args),
         ("cat", Some(args)) => cat(fsfuture, args),
+        ("rm", Some(args)) => rm(fsfuture, args),
         _ => {
             println!("You must choose a command.\n{}", app_args.usage());
             return;

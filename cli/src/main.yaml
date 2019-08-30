@@ -51,3 +51,10 @@ commands:
             help: The path to retrieve.
             required: true
             index: 1
+  - rm:
+      about: Deleted the file at the given path.
+      args:
+        - PATH:
+            help: The path to delete.
+            required: true
+            index: 1
