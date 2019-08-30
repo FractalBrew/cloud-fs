@@ -3,13 +3,14 @@ trigger:
 
 variables:
   default_toolchain: nightly
+  default_vm: macos-10.13
 
 jobs:
   - job: clippy
     displayName: Lint code
     continueOnError: true
     pool:
-      vmImage: ubuntu-16.04
+      vmImage: $(default_vm)
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
@@ -26,7 +27,7 @@ jobs:
     displayName: Check code formatting
     continueOnError: true
     pool:
-      vmImage: ubuntu-16.04
+      vmImage: $(default_vm)
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
@@ -43,7 +44,7 @@ jobs:
     displayName: Check docs
     continueOnError: true
     pool:
-      vmImage: ubuntu-16.04
+      vmImage: $(default_vm)
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
