@@ -59,7 +59,7 @@ jobs:
         displayName: Run clippy
 
   - job: coverage
-    displayName: Generate code coverate
+    displayName: Generate code coverage
     continueOnError: true
     pool:
       vmImage: ubuntu-16.04
