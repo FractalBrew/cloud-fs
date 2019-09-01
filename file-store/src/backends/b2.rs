@@ -1289,6 +1289,58 @@ impl TryFrom<FileStore> for B2Backend {
     }
 }
 
+async fn object_list(
+    client: B2Client,
+    backend_prefix: ObjectPath,
+    prefix: ObjectPath,
+    delimiter: Option<String>,
+) -> StorageResult<ObjectStream> {
+    let mut file_part = backend_prefix.join(&prefix);
+    let bucket = file_part.unshift_part();
+
+    let mut request = ListBucketsRequest {
+        account_id: client.account_id().await?,
+        bucket_id: None,
+        bucket_name: None,
+        bucket_types: Default::default(),
+    };
+
+    if let Some(ref bucket_name) = bucket {
+        // Only include the bucket named `bucket`.
+        request.bucket_name = Some(bucket_name.clone());
+    }
+
+    let bucket_name = bucket.unwrap_or_else(String::new);
+    let path = ObjectPath::new(bucket_name.clone())?;
+    let listers = client
+        .b2_list_buckets(path, request)
+        .await?
+        .buckets
+        .drain(..)
+        .filter(|b| b.bucket_name.starts_with(&bucket_name))
+        .map(move |b| {
+            let options = ListFileVersionsRequest {
+                bucket_id: b.bucket_id.clone(),
+                start_file_name: None,
+                start_file_id: None,
+                max_file_count: None,
+                prefix: Some(file_part.to_string()),
+                delimiter: delimiter.clone(),
+            };
+
+            let requestor = FileVersionsRequestor::new(client.clone(), prefix.clone(), options);
+            let temp_prefix = backend_prefix.clone();
+            ListStream::new(requestor)
+                .and_then(move |i| ready(new_object(&b.bucket_name, i, &temp_prefix)))
+        })
+        .fold(MergedStreams::new(), |mut m, s| {
+            m.push(s);
+            m
+        });
+
+    Ok(ObjectStream::from_stream(listers))
+}
+
 impl StorageBackend for B2Backend {
     fn backend_type(&self) -> Backend {
         Backend::B2
@@ -1299,64 +1351,17 @@ impl StorageBackend for B2Backend {
         P: TryInto<ObjectPath>,
         P::Error: Into<StorageError>,
     {
-        async fn list(
-            client: B2Client,
-            backend_prefix: ObjectPath,
-            prefix: ObjectPath,
-        ) -> StorageResult<ObjectStream> {
-            let mut file_part = backend_prefix.join(&prefix);
-            let bucket = file_part.unshift_part();
-
-            let mut request = ListBucketsRequest {
-                account_id: client.account_id().await?,
-                bucket_id: None,
-                bucket_name: None,
-                bucket_types: Default::default(),
-            };
-
-            if let Some(ref bucket_name) = bucket {
-                // Only include the bucket named `bucket`.
-                request.bucket_name = Some(bucket_name.clone());
-            }
-
-            let bucket_name = bucket.unwrap_or_else(String::new);
-            let path = ObjectPath::new(bucket_name.clone())?;
-            let listers = client
-                .b2_list_buckets(path, request)
-                .await?
-                .buckets
-                .drain(..)
-                .filter(|b| b.bucket_name.starts_with(&bucket_name))
-                .map(move |b| {
-                    let options = ListFileVersionsRequest {
-                        bucket_id: b.bucket_id.clone(),
-                        start_file_name: None,
-                        start_file_id: None,
-                        max_file_count: None,
-                        prefix: Some(file_part.to_string()),
-                        delimiter: None,
-                    };
-
-                    let requestor =
-                        FileVersionsRequestor::new(client.clone(), prefix.clone(), options);
-                    let temp_prefix = backend_prefix.clone();
-                    ListStream::new(requestor)
-                        .and_then(move |i| ready(new_object(&b.bucket_name, i, &temp_prefix)))
-                })
-                .fold(MergedStreams::new(), |mut m, s| {
-                    m.push(s);
-                    m
-                });
-
-            Ok(ObjectStream::from_stream(listers))
-        }
-
         let prefix = match prefix.try_into() {
             Ok(p) => p,
             Err(e) => return ObjectStreamFuture::from_value(Err(e.into())),
         };
 
-        ObjectStreamFuture::from_future(list(self.client(), self.settings.prefix.clone(), prefix))
+        ObjectStreamFuture::from_future(object_list(
+            self.client(),
+            self.settings.prefix.clone(),
+            prefix,
+            None,
+        ))
     }
 
     fn list_directory<P>(&self, dir: P) -> ObjectStreamFuture
@@ -1369,11 +1374,16 @@ impl StorageBackend for B2Backend {
             Err(e) => return ObjectStreamFuture::from_value(Err(e.into())),
         };
 
-        if !path.is_empty() && path.is_dir_prefix() {
-            path.pop_part();
+        if !path.is_empty() && !path.is_dir_prefix() {
+            path.push_part("");
         }
 
-        unimplemented!();
+        ObjectStreamFuture::from_future(object_list(
+            self.client(),
+            self.settings.prefix.clone(),
+            path,
+            Some(String::from("/")),
+        ))
     }
 
     fn get_object<P>(&self, path: P) -> ObjectFuture
