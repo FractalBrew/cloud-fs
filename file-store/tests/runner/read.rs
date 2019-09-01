@@ -131,6 +131,86 @@ pub async fn test_list_objects(fs: &FileStore, context: &TestContext) -> TestRes
     Ok(())
 }
 
+pub async fn test_list_directory(fs: &FileStore, context: &TestContext) -> TestResult<()> {
+    async fn test_list<'a>(
+        fs: &'a FileStore,
+        context: &'a TestContext,
+        path: &'static str,
+        files: Vec<(&'static str, ObjectType, u64)>,
+    ) -> TestResult<()> {
+        if !context.contains(path) {
+            return Ok(());
+        }
+
+        let mut expected_files: Vec<(ObjectPath, ObjectType, u64)> = files
+            .iter()
+            .filter_map(|info| {
+                if context.contains(info.0) {
+                    let path = context.get_path(info.0);
+                    Some((path, info.1, info.2))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut results = fs
+            .list_directory(context.get_path(path))
+            .await?
+            .try_collect::<Vec<Object>>()
+            .await?;
+        results.sort();
+        expected_files.sort();
+
+        test_assert_eq!(
+            results.len(),
+            expected_files.len(),
+            "Should have seen the right number of results.",
+        );
+
+        for _ in 0..expected_files.len() {
+            let result = results.remove(0);
+            let (path, file_type, size) = expected_files.remove(0);
+            compare_file(&result, path, file_type, size)?;
+        }
+
+        Ok(())
+    }
+
+    let base = vec![("test1", ObjectType::Directory, 0)];
+    test_list(fs, context, "test1", base).await?;
+
+    let mut dir1 = vec![
+        ("test1/dir1/largefile", ObjectType::File, 100 * MB),
+        ("test1/dir1/mediumfile", ObjectType::File, 5 * MB),
+        ("test1/dir1/smallfile.txt", ObjectType::File, 27),
+        ("test1/dir1/dir2", ObjectType::Directory, 0),
+    ];
+
+    if fs.backend_type() == Backend::File {
+        dir1.extend(vec![("test1/dir1/maybedir", ObjectType::Directory, 0)])
+    } else {
+        dir1.extend(vec![("test1/dir1/maybedir", ObjectType::File, 0)])
+    }
+
+    test_list(fs, context, "test1/dir1", dir1).await?;
+
+    let dir2 = vec![
+        ("test1/dir1/dir2/foo", ObjectType::File, 0),
+        ("test1/dir1/dir2/bar", ObjectType::File, 0),
+        ("test1/dir1/dir2/0foo", ObjectType::File, 0),
+        ("test1/dir1/dir2/5diz", ObjectType::File, 0),
+        ("test1/dir1/dir2/1bar", ObjectType::File, 0),
+        ("test1/dir1/dir2/daz", ObjectType::File, 300),
+        ("test1/dir1/dir2/hop", ObjectType::File, 0),
+        ("test1/dir1/dir2/yu", ObjectType::File, 0),
+    ];
+
+    test_list(fs, context, "test1/dir1/dir2", dir2).await?;
+
+    Ok(())
+}
+
 pub async fn test_get_object(fs: &FileStore, context: &TestContext) -> TestResult<()> {
     async fn test_pass(
         fs: &FileStore,

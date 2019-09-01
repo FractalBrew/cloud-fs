@@ -20,7 +20,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
-use futures::stream::{once, Stream, StreamExt, TryStreamExt};
+use futures::stream::{empty, once, Stream, StreamExt, TryStreamExt};
 use log::trace;
 use tokio_fs::DirEntry;
 use tokio_io::AsyncWriteExt;
@@ -407,9 +407,42 @@ impl StorageBackend for FileBackend {
         P::Error: Into<StorageError>,
     {
         async fn list(space: FileSpace, directory: ObjectPath) -> StorageResult<ObjectStream> {
-            let _path = space.get_std_path(&directory)?;
+            let path = space.get_std_path(&directory)?;
+            let metadata = wrap_future(symlink_metadata(path.clone()), directory.clone()).await?;
+            if !metadata.is_dir() {
+                let stream = ObjectStream::from_stream(empty());
+                return Ok(stream);
+            }
 
-            unimplemented!();
+            Ok(ObjectStream::from_stream(
+                wrap_stream(
+                    wrap_future(read_dir(path.clone()), directory.clone()).await?,
+                    directory.clone(),
+                )
+                .and_then(move |entry| {
+                    let path_base = directory.clone();
+                    wrap_future(symlink_metadata(entry.path()), directory.clone()).map(
+                        move |result| match result {
+                            Ok(metadata) => {
+                                let file_name = match entry.file_name().into_string() {
+                                    Ok(s) => s,
+                                    Err(_) => {
+                                        return Err(error::invalid_data::<StorageError>(
+                                            "Unable to convert OSString.",
+                                            None,
+                                        ))
+                                    }
+                                };
+
+                                let mut path = path_base.clone();
+                                path.push_part(&file_name);
+                                Ok(get_object(path, Some(metadata)))
+                            }
+                            Err(e) => Err(e),
+                        },
+                    )
+                }),
+            ))
         }
 
         let mut path = match dir.try_into() {

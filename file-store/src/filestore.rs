@@ -47,7 +47,7 @@ impl FileStore {
     /// that have a name beginning with the directory and not including any
     /// additional `/` character are returned. This will include directory
     /// objects even if the underlying storage doesn't actually support
-    /// directories to indicate that there are deeper objects not included.
+    /// directories to indicate that there may be deeper objects not included.
     pub fn list_directory<P>(&self, dir: P) -> ObjectStreamFuture
     where
         P: TryInto<ObjectPath>,

@@ -223,6 +223,7 @@ macro_rules! make_test {
 macro_rules! build_tests {
     ($root:expr, $backend:expr, $setup:expr, $cleanup:expr) => {
         make_test!($root, $backend, read, test_list_objects, $setup, $cleanup);
+        make_test!($root, $backend, read, test_list_directory, $setup, $cleanup);
         make_test!($root, $backend, read, test_get_object, $setup, $cleanup);
         make_test!(
             $root,
