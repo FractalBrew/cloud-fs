@@ -16,7 +16,7 @@ use super::error;
 /// these parts.
 ///
 /// Paths to objects must not start with a `/` character. For all methods other
-/// than [`list_objects`](struct.FileStore.html#method.list_objects) the path
+/// than [`list_objects`](enum.FileStore.html#method.list_objects) the path
 /// also must not end with a `/` character.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ObjectPath {

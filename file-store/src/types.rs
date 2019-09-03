@@ -26,11 +26,11 @@ pub type Data = Bytes;
 pub type DataStream = WrappedStream<StorageResult<Data>>;
 /// A future that returns a connected [`FileStore`](enum.FileStore.html) implementation.
 pub type ConnectFuture = WrappedFuture<StorageResult<FileStore>>;
-/// A stream that returns [`Object`s](struct.Object.html).
+/// A stream that returns [`Object`s](enum.Object.html).
 pub type ObjectStream = WrappedStream<StorageResult<Object>>;
 /// A future that returns an [`ObjectStream`](type.ObjectStream.html).
 pub type ObjectStreamFuture = WrappedFuture<StorageResult<ObjectStream>>;
-/// A future that returns an [`Object`](struct.Object.html).
+/// A future that returns an [`Object`](enum.Object.html).
 pub type ObjectFuture = WrappedFuture<StorageResult<Object>>;
 /// A future that resolves whenever the requested operation is complete.
 pub type OperationCompleteFuture = WrappedFuture<StorageResult<()>>;

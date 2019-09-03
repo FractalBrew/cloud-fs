@@ -3,13 +3,13 @@
 //! The [`FileBackend`](struct.FileBackend.html) allows access to the local
 //! file system. It must be instantiated with a local directory which is then
 //! used as the root of the files visible through the returned
-//! [`FileStore`](../../struct.FileStore.html).
+//! [`FileStore`](../../enum.FileStore.html).
 //!
 //! Directories and symlinks cannot be created but will be visible through
-//! [`list_objects`](../../struct.FileStore.html#method.list_objects) and
-//! [`get_object`](../../struct.FileStore.html#method.get_objects).
-//! [`delete_object`](../../struct.FileStore.html#method.delete_object) and
-//! [`write_file_from_stream`](../../struct.FileStore.html#method.write_file_from_stream)
+//! [`list_objects`](../../enum.FileStore.html#method.list_objects) and
+//! [`get_object`](../../enum.FileStore.html#method.get_objects).
+//! [`delete_object`](../../enum.FileStore.html#method.delete_object) and
+//! [`write_file_from_stream`](../../enum.FileStore.html#method.write_file_from_stream)
 //! will remove these (in the directory case recursively).
 use std::convert::TryInto;
 use std::fs::Metadata;
@@ -359,7 +359,7 @@ pub struct FileBackend {
 }
 
 impl FileBackend {
-    /// Creates a new [`FileStore`](../../struct.FileStore.html) instance using the
+    /// Creates a new [`FileStore`](../../enum.FileStore.html) instance using the
     /// file backend.
     ///
     /// The root path provided must be a directory and is used as the base of

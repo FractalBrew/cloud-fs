@@ -1141,7 +1141,7 @@ pub struct B2Backend {
 }
 
 impl B2Backend {
-    /// Creates a new [`FileStore`](../../struct.FileStore.html) instance using the
+    /// Creates a new [`FileStore`](../../enum.FileStore.html) instance using the
     /// b2 backend.
     ///
     /// When constructed in this manner the root for all paths will be at the
@@ -1252,7 +1252,7 @@ impl B2BackendBuilder {
         self
     }
 
-    /// Creates a new B2 based [`FileStore`](../../struct.FileStore.html) using
+    /// Creates a new B2 based [`FileStore`](../../enum.FileStore.html) using
     /// this builder's settings.
     pub fn connect(self) -> ConnectFuture {
         ConnectFuture::from_future(async {

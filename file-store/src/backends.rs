@@ -1,7 +1,7 @@
 //! Contains the different storage backend implementations.
 //!
 //! Each backend allows for accessing files in a different storage system.
-//! Normally you just crate a [`FileStore`](../struct.FileStore.html) from the
+//! Normally you just crate a [`FileStore`](../enum.FileStore.html) from the
 //! backend and then everything else is done by calls to the `FileStore` which
 //! generally behave the same regardless of the backend.
 #[cfg(feature = "b2")]
