@@ -136,6 +136,29 @@ impl From<StorageError> for io::Error {
     }
 }
 
+impl From<io::Error> for StorageError {
+    fn from(error: io::Error) -> StorageError {
+        let kind = match error.kind() {
+            io::ErrorKind::NotFound => StorageErrorKind::NotFound(ObjectPath::empty()),
+            io::ErrorKind::PermissionDenied => StorageErrorKind::AccessDenied,
+            io::ErrorKind::ConnectionRefused => StorageErrorKind::ConnectionFailed,
+            io::ErrorKind::ConnectionReset => StorageErrorKind::ConnectionClosed,
+            io::ErrorKind::ConnectionAborted => StorageErrorKind::ConnectionFailed,
+            io::ErrorKind::NotConnected => StorageErrorKind::ConnectionClosed,
+            io::ErrorKind::BrokenPipe => StorageErrorKind::ConnectionClosed,
+            io::ErrorKind::InvalidInput => StorageErrorKind::InvalidData,
+            io::ErrorKind::InvalidData => StorageErrorKind::InvalidData,
+            _ => StorageErrorKind::Other,
+        };
+
+        StorageError {
+            kind,
+            detail: error.to_string(),
+            inner: Some(Box::new(error)),
+        }
+    }
+}
+
 impl From<Infallible> for StorageError {
     fn from(_: Infallible) -> StorageError {
         unimplemented!();

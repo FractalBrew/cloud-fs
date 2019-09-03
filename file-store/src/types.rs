@@ -12,10 +12,10 @@ use bytes::{Bytes, IntoBuf};
 use futures::executor::{block_on_stream, BlockingStream};
 use futures::stream::Stream;
 
-use super::filestore::FileStore;
+use super::FileStore;
 pub use error::{StorageError, StorageErrorKind, StorageResult, TransferError};
 pub use future::WrappedFuture;
-pub use objects::{Object, ObjectReference, ObjectType};
+pub use objects::{Object, ObjectInfo, ObjectType, UploadInfo};
 pub use path::ObjectPath;
 pub use stream::WrappedStream;
 
@@ -24,7 +24,7 @@ pub type Data = Bytes;
 
 /// A stream that returns [`Data`](type.Data.html).
 pub type DataStream = WrappedStream<StorageResult<Data>>;
-/// A future that returns a [FileStore](struct.FileStore.html) implementation.
+/// A future that returns a connected [`FileStore`](enum.FileStore.html) implementation.
 pub type ConnectFuture = WrappedFuture<StorageResult<FileStore>>;
 /// A stream that returns [`Object`s](struct.Object.html).
 pub type ObjectStream = WrappedStream<StorageResult<Object>>;

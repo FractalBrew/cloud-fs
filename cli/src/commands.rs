@@ -7,7 +7,9 @@ use futures::stream::{StreamExt, TryStreamExt};
 use tokio::io::{stdin, stdout, AsyncWriteExt, Stdin};
 
 use file_store::utils::ReaderStream;
-use file_store::{ConnectFuture, ObjectPath, StorageError, TransferError};
+use file_store::{
+    ConnectFuture, ObjectInfo, ObjectPath, StorageBackend, StorageError, TransferError,
+};
 
 #[derive(Debug)]
 pub struct ErrorResult {

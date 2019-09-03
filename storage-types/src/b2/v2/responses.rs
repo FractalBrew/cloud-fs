@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{BucketType, Int, Map};
+use super::{BucketType, FileAction, Int, Map};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +73,7 @@ pub struct ListBucketsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct FileInfo {
     pub account_id: String,
-    pub action: String,
+    pub action: FileAction,
     pub bucket_id: String,
     pub content_length: Int,
     pub content_sha1: Option<String>,

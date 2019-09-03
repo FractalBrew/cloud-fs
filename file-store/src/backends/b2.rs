@@ -28,7 +28,7 @@
 //! The last modified time of an uploaded file will be set to the time that the
 //! upload began.
 use std::cmp::max;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryInto;
 use std::fmt;
 use std::future::Future;
 use std::io::Read;
@@ -40,6 +40,7 @@ use std::task::{Context, Poll};
 
 use base64::encode;
 use bytes::buf::FromBuf;
+use bytes::IntoBuf;
 use futures::compat::*;
 use futures::future::{ready, FutureExt, TryFutureExt};
 use futures::lock::Mutex;
@@ -57,15 +58,16 @@ use serde_json::{from_str, to_string};
 use sha1::Sha1;
 use tokio_executor::spawn;
 
-use storage_types::b2::v2::percent_encode;
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
+use storage_types::b2::v2::{percent_encode, FileAction};
 
-use super::{Backend, BackendImplementation, ObjectInternals, StorageBackend};
-use crate::filestore::FileStore;
+use super::Backend;
 use crate::types::future::{FuturePoll, ResultFuturePoll};
 use crate::types::stream::{MergedStreams, ResultStreamPoll, VecStream};
 use crate::types::*;
+use crate::utils::into_data_stream;
+use crate::{FileStore, StorageBackend};
 
 type Client = HyperClient<HttpsConnector<HttpConnector>>;
 type StringFuture = WrappedFuture<StorageResult<String>>;
@@ -118,57 +120,70 @@ impl From<serde_json::error::Error> for StorageError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct B2ObjectInternals {
-    infos: Vec<FileInfo>,
+#[derive(Clone, Debug)]
+struct FileVersions {
+    versions: Vec<FileInfo>,
 }
 
-impl B2ObjectInternals {
-    fn new(mut infos: Vec<FileInfo>) -> B2ObjectInternals {
-        infos.sort_by(|a, b| a.upload_timestamp.cmp(&b.upload_timestamp));
+impl FileVersions {
+    fn new(mut versions: Vec<FileInfo>) -> FileVersions {
+        versions.sort_by(|a, b| a.upload_timestamp.cmp(&b.upload_timestamp));
 
-        B2ObjectInternals { infos }
+        FileVersions { versions }
     }
 
     fn latest(&self) -> &FileInfo {
-        &self.infos[self.infos.len() - 1]
-    }
-
-    fn file_name(&self) -> &str {
-        &self.latest().file_name
-    }
-
-    fn size(&self) -> u64 {
-        self.latest().content_length
+        &self.versions[self.versions.len() - 1]
     }
 
     fn iter(&self) -> Iter<FileInfo> {
-        self.infos.iter()
+        self.versions.iter()
     }
 }
 
-fn new_object(bucket: &str, info: B2ObjectInternals, prefix: &ObjectPath) -> StorageResult<Object> {
-    let mut path = ObjectPath::new(info.file_name())?;
-    path.shift_part(bucket);
-    let is_dir = path.is_dir_prefix();
+/// The B2 implementation for [`Object`](../../enum.Object.html).
+#[derive(Clone, Debug)]
+pub struct B2Object {
+    path: ObjectPath,
+    versions: FileVersions,
+}
 
-    let o_type = if is_dir {
+impl B2Object {
+    fn versions(&self) -> Iter<FileInfo> {
+        self.versions.iter()
+    }
+}
+
+impl ObjectInfo for B2Object {
+    fn path(&self) -> ObjectPath {
+        self.path.clone()
+    }
+
+    fn size(&self) -> u64 {
+        self.versions.latest().content_length
+    }
+
+    fn object_type(&self) -> ObjectType {
+        match &self.versions.latest().action {
+            FileAction::Upload => ObjectType::File,
+            FileAction::Folder => ObjectType::Directory,
+            _ => ObjectType::Unknown,
+        }
+    }
+}
+
+fn new_object(bucket: &str, versions: FileVersions, prefix: &ObjectPath) -> StorageResult<Object> {
+    let mut path = ObjectPath::new(&versions.latest().file_name)?;
+    path.shift_part(bucket);
+    if path.is_dir_prefix() {
         path.pop_part();
-        ObjectType::Directory
-    } else {
-        ObjectType::File
-    };
+    }
 
     for _ in prefix.parts() {
         path.unshift_part();
     }
 
-    Ok(Object {
-        object_type: o_type,
-        path,
-        size: info.size(),
-        internals: ObjectInternals::B2(info),
-    })
+    Ok(Object::from(B2Object { path, versions }))
 }
 
 #[derive(Clone, Debug)]
@@ -1089,28 +1104,25 @@ where
     R: ListRequestor<S> + Send + Unpin + 'static,
     S: Send + 'static,
 {
-    type Item = StorageResult<B2ObjectInternals>;
+    type Item = StorageResult<FileVersions>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-    ) -> ResultStreamPoll<B2ObjectInternals> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> ResultStreamPoll<FileVersions> {
         match self.poll_next_info(cx) {
             Poll::Ready(Some(Ok(info))) => {
                 if self.current.is_empty() || self.current[0].file_name == info.file_name {
                     self.current.push(info);
                     self.poll_next(cx)
                 } else {
-                    let internals = B2ObjectInternals::new(self.current.drain(..).collect());
+                    let versions = FileVersions::new(self.current.drain(..).collect());
                     self.current.push(info);
-                    Poll::Ready(Some(Ok(internals)))
+                    Poll::Ready(Some(Ok(versions)))
                 }
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
             Poll::Ready(None) => {
                 if !self.current.is_empty() {
-                    let internals = B2ObjectInternals::new(self.current.drain(..).collect());
-                    Poll::Ready(Some(Ok(internals)))
+                    let versions = FileVersions::new(self.current.drain(..).collect());
+                    Poll::Ready(Some(Ok(versions)))
                 } else {
                     Poll::Ready(None)
                 }
@@ -1267,25 +1279,8 @@ impl B2BackendBuilder {
             let b2_client = backend.client();
             b2_client.session().await?;
 
-            Ok(FileStore {
-                backend: BackendImplementation::B2(Box::new(backend)),
-            })
+            Ok(FileStore::from(backend))
         })
-    }
-}
-
-impl TryFrom<FileStore> for B2Backend {
-    type Error = StorageError;
-
-    fn try_from(file_store: FileStore) -> StorageResult<B2Backend> {
-        if let BackendImplementation::B2(b) = file_store.backend {
-            Ok(b.deref().clone())
-        } else {
-            Err(error::invalid_settings::<StorageError>(
-                "FileStore does not hold a FileBackend",
-                None,
-            ))
-        }
     }
 }
 
@@ -1410,15 +1405,15 @@ impl StorageBackend for B2Backend {
             };
 
             let requestor = FileVersionsRequestor::new(client.clone(), path.clone(), options);
-            let mut internals: Vec<B2ObjectInternals> = ListStream::new(requestor)
-                .try_filter(|internals| ready(internals.file_name() == file))
+            let mut files: Vec<FileVersions> = ListStream::new(requestor)
+                .try_filter(|versions| ready(versions.latest().file_name == file))
                 .try_collect()
                 .await?;
-            if internals.len() != 1 {
+            if files.len() != 1 {
                 return Err(error::not_found::<StorageError>(path, None));
             }
 
-            new_object(&bucket.bucket_name, internals.remove(0), &backend_prefix)
+            new_object(&bucket.bucket_name, files.remove(0), &backend_prefix)
         }
 
         let path = match path.try_into() {
@@ -1438,13 +1433,14 @@ impl StorageBackend for B2Backend {
         ObjectFuture::from_future(get(client, prefix, path))
     }
 
-    fn get_file_stream<O>(&self, reference: O) -> DataStreamFuture
+    fn get_file_stream<P>(&self, path: P) -> DataStreamFuture
     where
-        O: ObjectReference,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
     {
-        let path = match reference.into_path() {
+        let path = match path.try_into() {
             Ok(p) => p,
-            Err(e) => return DataStreamFuture::from_value(Err(e)),
+            Err(e) => return DataStreamFuture::from_value(Err(e.into())),
         };
 
         if path.is_dir_prefix() {
@@ -1478,19 +1474,24 @@ impl StorageBackend for B2Backend {
         DataStreamFuture::from_future(future)
     }
 
-    fn delete_object<O>(&self, reference: O) -> OperationCompleteFuture
+    fn delete_object<P>(&self, path: P) -> OperationCompleteFuture
     where
-        O: ObjectReference,
+        P: TryInto<ObjectPath>,
+        P::Error: Into<StorageError>,
     {
-        async fn delete<O>(backend: B2Backend, reference: O) -> StorageResult<()>
-        where
-            O: ObjectReference,
-        {
-            let object = reference.into_object(&backend).await?;
-            let path = object.path();
-            let internals: B2ObjectInternals = object.try_into()?;
+        async fn delete(backend: B2Backend, path: ObjectPath) -> StorageResult<()> {
+            let object: B2Object = match backend.clone().get_object(path.clone()).await?.try_into()
+            {
+                Ok(o) => o,
+                Err(_) => {
+                    return Err(error::internal_error::<StorageError>(
+                        "Failed to convert retrieved object to the expected type.",
+                        None,
+                    ));
+                }
+            };
 
-            for info in internals.iter() {
+            for info in object.versions() {
                 match info.file_id {
                     Some(ref id) => {
                         backend
@@ -1516,13 +1517,19 @@ impl StorageBackend for B2Backend {
             Ok(())
         }
 
-        OperationCompleteFuture::from_future(delete(self.clone(), reference))
+        let path = match path.try_into() {
+            Ok(p) => p,
+            Err(e) => return OperationCompleteFuture::from_value(Err(e.into())),
+        };
+        OperationCompleteFuture::from_future(delete(self.clone(), path))
     }
 
-    fn write_file_from_stream<S, P>(&self, path: P, stream: S) -> WriteCompleteFuture
+    fn write_file_from_stream<S, I, E, P>(&self, info: P, stream: S) -> WriteCompleteFuture
     where
-        S: Stream<Item = StorageResult<Data>> + Send + 'static,
-        P: TryInto<ObjectPath>,
+        S: Stream<Item = Result<I, E>> + Send + 'static,
+        I: IntoBuf + 'static,
+        E: Into<StorageError> + 'static,
+        P: TryInto<UploadInfo>,
         P::Error: Into<StorageError>,
     {
         async fn upload<S>(
@@ -1551,13 +1558,14 @@ impl StorageBackend for B2Backend {
             .await
         }
 
-        let path = match path.try_into() {
-            Ok(t) => t,
+        let info = match info.try_into() {
+            Ok(i) => i,
             Err(e) => {
                 return WriteCompleteFuture::from_value(Err(TransferError::TargetError(e.into())))
             }
         };
 
+        let path = info.path();
         if path.is_dir_prefix() {
             return WriteCompleteFuture::from_value(Err(TransferError::TargetError(
                 error::invalid_path(
@@ -1572,7 +1580,7 @@ impl StorageBackend for B2Backend {
             self.settings.max_small_file_size,
             self.settings.prefix.clone(),
             path,
-            stream,
+            into_data_stream(stream),
         ))
     }
 }

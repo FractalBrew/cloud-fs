@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
-use storage_types::b2::v2::{percent_decode, BucketType, Int};
+use storage_types::b2::v2::{percent_decode, BucketType, FileAction, Int};
 
 use crate::runner::TestResult;
 
@@ -326,7 +326,7 @@ impl FileLister {
 
                                 return ListResult::Item(FileInfo {
                                     account_id: TEST_ACCOUNT_ID.to_owned(),
-                                    action: String::from("folder"),
+                                    action: FileAction::Folder,
                                     bucket_id: self.bucket_id.clone(),
                                     content_length: 0,
                                     content_sha1: None,
@@ -341,7 +341,7 @@ impl FileLister {
 
                         ListResult::Item(FileInfo {
                             account_id: TEST_ACCOUNT_ID.to_owned(),
-                            action: String::from("upload"),
+                            action: FileAction::Upload,
                             bucket_id: self.bucket_id.clone(),
                             content_length: meta.len(),
                             content_sha1: None,
@@ -819,7 +819,7 @@ impl B2Server {
 
         api_response!(UploadFileResponse {
             account_id: TEST_ACCOUNT_ID.to_owned(),
-            action: String::from("upload"),
+            action: FileAction::Upload,
             bucket_id: bucket_id.to_owned(),
             content_length: length,
             content_sha1: Some(expected_sha1.to_owned()),
@@ -857,7 +857,7 @@ impl B2Server {
 
         api_response!(StartLargeFileResponse {
             account_id: TEST_ACCOUNT_ID.to_owned(),
-            action: String::from("start"),
+            action: FileAction::Start,
             bucket_id: body.bucket_id,
             content_length: 0,
             content_sha1: None,
@@ -1001,7 +1001,7 @@ impl B2Server {
 
         api_response!(FinishLargeFileResponse {
             account_id: String::from(TEST_ACCOUNT_ID),
-            action: String::from("upload"),
+            action: FileAction::Upload,
             bucket_id: upload.bucket_id,
             content_length: length,
             content_sha1: None,

@@ -10,6 +10,7 @@ file = ["tokio-fs", "tokio-io"]
 b2 = ["hyper", "hyper-tls", "base64", "http", "serde", "serde_json", "storage-types", "sha1", "percent-encoding", "old-futures", "tokio-executor"]
 
 [dependencies]
+enum_dispatch = { git = "https://github.com/Mossop/enum_dispatch.git", rev="806ce4a0b6762a439dec6b8634d306249907e1fb" }
 futures-preview = { version = "=0.3.0-alpha.18", features = ["compat", "async-await"] }
 bytes = "^0.4.12"
 log = "^0.4.8"

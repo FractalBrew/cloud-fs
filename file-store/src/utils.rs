@@ -4,11 +4,12 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use bytes::BytesMut;
-use futures::stream::Stream;
+use bytes::buf::FromBuf;
+use bytes::{BytesMut, IntoBuf};
+use futures::stream::{Stream, StreamExt};
 use tokio_io::{AsyncRead, BufReader};
 
-use crate::types::Data;
+use crate::types::{Data, StorageError};
 
 /// Converts an AsyncRead into a stream that emits [`Data`](../type.Data.html).
 pub struct ReaderStream<R>
@@ -88,4 +89,16 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<io::Result<Data>>> {
         self.inner_poll(cx)
     }
+}
+
+pub(crate) fn into_data_stream<S, I, E>(stream: S) -> impl Stream<Item = Result<Data, StorageError>>
+where
+    S: Stream<Item = Result<I, E>> + Send + 'static,
+    I: IntoBuf,
+    E: Into<StorageError>,
+{
+    stream.map(|r| match r {
+        Ok(d) => Ok(Data::from_buf(d)),
+        Err(e) => Err(e.into()),
+    })
 }

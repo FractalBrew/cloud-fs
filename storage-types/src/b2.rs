@@ -14,8 +14,6 @@ pub mod v2 {
     pub type Int = u64;
     pub type Map = serde_json::Map<String, serde_json::Value>;
 
-    struct BucketTypeListVisitor;
-
     /// The set of characters to percent encode.
     ///
     /// The B2 docs lie. Must use the correct set.
@@ -47,6 +45,112 @@ pub mod v2 {
     pub fn percent_encode(value: &str) -> String {
         utf8_percent_encode(value, &ENCODE_SET).collect()
     }
+
+    #[derive(Debug, Clone)]
+    pub enum FileAction {
+        Start,
+        Upload,
+        Hide,
+        Folder,
+        Other(String),
+    }
+
+    impl ser::Serialize for FileAction {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: ser::Serializer,
+        {
+            match self {
+                Self::Start => serializer.serialize_str("start"),
+                Self::Upload => serializer.serialize_str("upload"),
+                Self::Hide => serializer.serialize_str("hide"),
+                Self::Folder => serializer.serialize_str("folder"),
+                Self::Other(ref name) => serializer.serialize_str(name),
+            }
+        }
+    }
+
+    impl<'de> de::Deserialize<'de> for FileAction {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: de::Deserializer<'de>,
+        {
+            deserializer.deserialize_str(FileActionVisitor)
+        }
+    }
+
+    struct FileActionVisitor;
+
+    impl<'de> de::Visitor<'de> for FileActionVisitor {
+        type Value = FileAction;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(
+                f,
+                "One of 'start', 'upload', 'hide', 'folder' or something else."
+            )
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            match v {
+                "start" => Ok(FileAction::Start),
+                "upload" => Ok(FileAction::Upload),
+                "hide" => Ok(FileAction::Hide),
+                "folder" => Ok(FileAction::Folder),
+                s => Ok(FileAction::Other(s.to_owned())),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum BucketTypes {
+        All,
+        Some(HashSet<BucketType>),
+        Any,
+    }
+
+    impl BucketTypes {
+        pub fn includes(&self, bucket_type: BucketType) -> bool {
+            match self {
+                Self::All => {
+                    if let BucketType::Unknown(_) = bucket_type {
+                        false
+                    } else {
+                        true
+                    }
+                }
+                Self::Some(set) => set.contains(&bucket_type),
+                Self::Any => true,
+            }
+        }
+    }
+
+    impl Default for BucketTypes {
+        fn default() -> Self {
+            Self::Any
+        }
+    }
+
+    impl ser::Serialize for BucketTypes {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: ser::Serializer,
+        {
+            match self {
+                Self::All => serializer.serialize_some(&["all"]),
+                Self::Some(set) => {
+                    let types: Vec<BucketType> = set.iter().cloned().collect();
+                    serializer.serialize_some(&types)
+                }
+                Self::Any => serializer.serialize_none(),
+            }
+        }
+    }
+
+    struct BucketTypeListVisitor;
 
     impl<'de> de::Visitor<'de> for BucketTypeListVisitor {
         type Value = BucketTypes;
@@ -115,79 +219,12 @@ pub mod v2 {
         }
     }
 
-    #[derive(Debug, Clone)]
-    pub enum BucketTypes {
-        All,
-        Some(HashSet<BucketType>),
-        Any,
-    }
-
-    impl BucketTypes {
-        pub fn includes(&self, bucket_type: BucketType) -> bool {
-            match self {
-                Self::All => {
-                    if let BucketType::Unknown(_) = bucket_type {
-                        false
-                    } else {
-                        true
-                    }
-                }
-                Self::Some(set) => set.contains(&bucket_type),
-                Self::Any => true,
-            }
-        }
-    }
-
-    impl Default for BucketTypes {
-        fn default() -> Self {
-            Self::Any
-        }
-    }
-
-    impl ser::Serialize for BucketTypes {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: ser::Serializer,
-        {
-            match self {
-                Self::All => serializer.serialize_some(&["all"]),
-                Self::Some(set) => {
-                    let types: Vec<BucketType> = set.iter().cloned().collect();
-                    serializer.serialize_some(&types)
-                }
-                Self::Any => serializer.serialize_none(),
-            }
-        }
-    }
-
     impl<'de> de::Deserialize<'de> for BucketTypes {
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
         where
             D: de::Deserializer<'de>,
         {
             deserializer.deserialize_option(BucketTypesVisitor)
-        }
-    }
-
-    struct BucketTypeVisitor;
-
-    impl<'de> de::Visitor<'de> for BucketTypeVisitor {
-        type Value = BucketType;
-
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "'allPublic', 'allPrivate' or 'snapshot'")
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            match v {
-                "allPublic" => Ok(BucketType::Public),
-                "allPrivate" => Ok(BucketType::Private),
-                "snapshot" => Ok(BucketType::Snapshot),
-                s => Ok(BucketType::Unknown(s.to_owned())),
-            }
         }
     }
 
@@ -209,6 +246,28 @@ pub mod v2 {
                 Self::Private => serializer.serialize_str("allPrivate"),
                 Self::Snapshot => serializer.serialize_str("snapshot"),
                 Self::Unknown(s) => serializer.serialize_str(&s),
+            }
+        }
+    }
+
+    struct BucketTypeVisitor;
+
+    impl<'de> de::Visitor<'de> for BucketTypeVisitor {
+        type Value = BucketType;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "'allPublic', 'allPrivate' or 'snapshot'")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            match v {
+                "allPublic" => Ok(BucketType::Public),
+                "allPrivate" => Ok(BucketType::Private),
+                "snapshot" => Ok(BucketType::Snapshot),
+                s => Ok(BucketType::Unknown(s.to_owned())),
             }
         }
     }

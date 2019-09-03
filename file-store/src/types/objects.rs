@@ -1,11 +1,14 @@
 //! Object types.
 
-use std::cmp::Ordering;
-use std::convert::TryInto;
+use std::cmp::{Ordering, PartialOrd};
+use std::convert::TryFrom;
 use std::fmt;
 
+use enum_dispatch::enum_dispatch;
+
 use super::*;
-use crate::backends::{ObjectInternals, StorageBackend};
+use crate::backends::b2::B2Object;
+use crate::backends::file::FileObject;
 
 /// An object's type. For most backends this will just be File.
 ///
@@ -73,33 +76,22 @@ impl fmt::Display for ObjectType {
     }
 }
 
+#[enum_dispatch(ObjectInfo)]
 /// An object of some kind that exists at a path in the storage system.
 ///
 /// Most backends only support File objects, and this crate only really supports
 /// manipulating file objects. This type does however support the idea of a non
 /// file type that physically exists at a path.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Object {
-    pub(crate) internals: ObjectInternals,
-    pub(crate) object_type: ObjectType,
-    pub(crate) path: ObjectPath,
-    pub(crate) size: u64,
+#[allow(missing_docs)]
+#[derive(Clone, Debug)]
+pub enum Object {
+    B2(B2Object),
+    File(FileObject),
 }
 
-impl Object {
-    /// Gets the object's path.
-    pub fn path(&self) -> ObjectPath {
-        self.path.clone()
-    }
-
-    /// Gets the object's size.
-    pub fn size(&self) -> u64 {
-        self.size
-    }
-
-    /// Gets the object's type.
-    pub fn object_type(&self) -> ObjectType {
-        self.object_type
+impl PartialEq for Object {
+    fn eq(&self, other: &Object) -> bool {
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -113,65 +105,71 @@ impl PartialOrd for Object {
 
 impl Ord for Object {
     fn cmp(&self, other: &Object) -> Ordering {
-        self.path.cmp(&other.path)
+        let order = self.path().cmp(&other.path());
+        if order != Ordering::Equal {
+            return order;
+        }
+
+        self.size().cmp(&other.size())
     }
 }
 
-/// A type that references an object in storage.
+/// Information about an object currently stored in a backend storage system.
 ///
-/// Implemented by [`Object`](struct.Object.html) and anything that can be
-/// converted into an [`ObjectPath`](struct.ObjectPath.html).
-pub trait ObjectReference: Clone + Send + 'static {
-    /// Returns a future that resolves to an object for the specified backend.
-    fn into_object<B>(self, backend: &B) -> ObjectFuture
-    where
-        B: StorageBackend;
+/// Some of the information is optional because not all storage backends can get
+/// access to it.
+#[enum_dispatch]
+pub trait ObjectInfo {
+    /// Gets the object's path.
+    fn path(&self) -> ObjectPath;
 
-    /// Returns an attempt to covert this to an ObjectPath.
-    fn into_path(self) -> StorageResult<ObjectPath>;
+    /// Gets the object's size.
+    fn size(&self) -> u64;
+
+    /// Gets the object's type.
+    fn object_type(&self) -> ObjectType;
 }
 
-impl ObjectReference for Object {
-    fn into_object<B>(self, backend: &B) -> ObjectFuture
-    where
-        B: StorageBackend,
-    {
-        if self.internals.from_backend() == backend.backend_type() {
-            ObjectFuture::from_value(Ok(self))
-        } else {
-            self.path.into_object(backend)
-        }
-    }
+/// Information used to upload a file.
+///
+/// This allows attempting to set various properties of a file on upload. Not
+/// all backends will support setting them all. Optional properties will just
+/// use the backend's default if unset.
+///
+/// Both [`ObjectPath`](struct.ObjectPath.html) and [`Object`](enum.Object.html)
+/// have `Into` implementations for this object so you may not need to create
+/// one of these manually enless there are specific properties you wish to
+/// change.
+pub struct UploadInfo {
+    path: ObjectPath,
+}
 
-    fn into_path(self) -> StorageResult<ObjectPath> {
-        Ok(self.path)
+impl UploadInfo {
+    /// Gets the path for the upload.
+    pub fn path(&self) -> ObjectPath {
+        self.path.clone()
     }
 }
 
-impl<P> ObjectReference for P
+impl<I> From<I> for UploadInfo
 where
-    P: TryInto<ObjectPath> + Clone + Send + 'static,
-    P::Error: Into<StorageError>,
+    I: ObjectInfo,
 {
-    fn into_object<B>(self, backend: &B) -> ObjectFuture
-    where
-        B: StorageBackend,
-    {
-        match self.try_into() {
-            Ok(path) => {
-                if path.is_dir_prefix() {
-                    return ObjectFuture::from_value(Err(error::invalid_path(
-                        path,
-                        "Object paths cannot be empty or end with a '/' character.",
-                    )));
-                }
-                backend.get_object(path)
-            }
-            Err(e) => ObjectFuture::from_value(Err(e.into())),
-        }
+    fn from(info: I) -> UploadInfo {
+        UploadInfo { path: info.path() }
     }
+}
 
-    fn into_path(self) -> StorageResult<ObjectPath> {
-        self.try_into().map_err(|e| e.into())
+impl From<ObjectPath> for UploadInfo {
+    fn from(path: ObjectPath) -> UploadInfo {
+        UploadInfo { path }
+    }
+}
+
+impl TryFrom<&str> for UploadInfo {
+    type Error = error::StorageError;
+
+    fn try_from(s: &str) -> Result<UploadInfo, error::StorageError> {
+        Ok(ObjectPath::new(s)?.into())
     }
 }
