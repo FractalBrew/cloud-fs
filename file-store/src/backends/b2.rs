@@ -41,8 +41,7 @@ use std::task::{Context, Poll};
 use base64::encode;
 use bytes::buf::FromBuf;
 use bytes::IntoBuf;
-use futures::compat::*;
-use futures::future::{ready, FutureExt, TryFutureExt};
+use futures::future::{ready, TryFutureExt};
 use futures::lock::Mutex;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use http::method::Method;
@@ -52,11 +51,9 @@ use hyper::client::Client as HyperClient;
 use hyper::{Request, Response};
 use hyper_tls::HttpsConnector;
 use log::trace;
-use old_futures::future::{ExecuteError, Executor, Future as OldFuture};
 use serde::de::DeserializeOwned;
 use serde_json::{from_str, to_string};
 use sha1::Sha1;
-use tokio_executor::spawn;
 
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
@@ -75,20 +72,6 @@ type StringFuture = WrappedFuture<StorageResult<String>>;
 const API_RETRIES: usize = 3;
 const TOTAL_MAX_SMALL_FILE_SIZE: u64 = 5 * 1000 * 1000 * 1000;
 const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 1000 * 1000 * 1000;
-
-#[derive(Clone)]
-struct Spawner;
-
-impl<F> Executor<F> for Spawner
-where
-    F: OldFuture<Item = (), Error = ()> + Send + 'static,
-{
-    fn execute(&self, future: F) -> Result<(), ExecuteError<F>> {
-        spawn(future.compat().map(|_| ()));
-
-        Ok(())
-    }
-}
 
 impl From<http::Error> for StorageError {
     fn from(error: http::Error) -> StorageError {
@@ -232,7 +215,7 @@ impl B2Client {
         request: Request<Body>,
     ) -> StorageResult<Response<Body>> {
         trace!("Requesting {}", request.uri());
-        let response = match self.client.request(request).compat().await {
+        let response = match self.client.request(request).await {
             Ok(r) => {
                 trace!("{} b2 api call succeeded", method);
                 r
@@ -249,7 +232,7 @@ impl B2Client {
             let (_, body) = response.into_parts();
 
             let mut data: String = String::new();
-            BlockingStreamReader::from_stream(body.compat())
+            BlockingStreamReader::from_stream(body)
                 .read_to_string(&mut data)
                 .unwrap();
             Err(generate_error(method, &path, &data))
@@ -269,7 +252,7 @@ impl B2Client {
         let (_, body) = response.into_parts();
 
         let mut data: String = String::new();
-        BlockingStreamReader::from_stream(body.compat())
+        BlockingStreamReader::from_stream(body)
             .read_to_string(&mut data)
             .unwrap();
 
@@ -403,7 +386,7 @@ impl B2Client {
         content_type: String,
         length: u64,
         hash: String,
-        stream: DataStream,
+        stream: VecStream<StorageResult<Data>>,
     ) -> StorageResult<UploadFileResponse> {
         let request = Request::builder()
             .method(Method::POST)
@@ -413,7 +396,7 @@ impl B2Client {
             .header("Content-Type", content_type)
             .header("Content-Length", length)
             .header("X-Bz-Content-Sha1", hash)
-            .body(Body::wrap_stream(Compat::new(stream)))?;
+            .body(Body::wrap_stream(stream))?;
 
         self.basic_request("b2_upload_file", path, request).await
     }
@@ -427,7 +410,7 @@ impl B2Client {
         part: usize,
         length: u64,
         hash: String,
-        stream: DataStream,
+        stream: VecStream<StorageResult<Data>>,
     ) -> StorageResult<UploadPartResponse> {
         let request = Request::builder()
             .method(Method::POST)
@@ -436,7 +419,7 @@ impl B2Client {
             .header("X-Bz-Part-Number", part)
             .header("Content-Length", length)
             .header("X-Bz-Content-Sha1", hash)
-            .body(Body::wrap_stream(Compat::new(stream)))?;
+            .body(Body::wrap_stream(stream))?;
 
         self.basic_request("b2_upload_part", path, request).await
     }
@@ -596,7 +579,7 @@ impl LargeFileUploader {
                 part,
                 len,
                 hash.clone(),
-                DataStream::from_stream(VecStream::from(buffers.drain(..).map(Ok).collect())),
+                VecStream::from(buffers.drain(..).map(Ok).collect()),
             )
             .await?;
 
@@ -793,7 +776,7 @@ where
                 String::from("b2/x-auto"),
                 size,
                 hash,
-                DataStream::from_stream(VecStream::from(data.drain(..).map(Ok).collect())),
+                VecStream::from(data.drain(..).map(Ok).collect()),
             )
             .await?;
 
@@ -1257,7 +1240,7 @@ impl B2BackendBuilder {
     pub fn connect(self) -> ConnectFuture {
         ConnectFuture::from_future(async {
             trace!("Connecting to B2 with settings {:?}", self.settings);
-            let connector = match HttpsConnector::new(4) {
+            let connector = match HttpsConnector::new() {
                 Ok(c) => c,
                 Err(e) => {
                     return Err(error::connection_failed(
@@ -1267,7 +1250,7 @@ impl B2BackendBuilder {
                 }
             };
 
-            let client = HyperClient::builder().executor(Spawner {}).build(connector);
+            let client = HyperClient::builder().build(connector);
 
             let backend = B2Backend {
                 settings: self.settings,
@@ -1465,7 +1448,7 @@ impl StorageBackend for B2Backend {
             .client()
             .b2_download_file_by_name(path, bucket, file_name.to_string())
             .map_ok(|body| {
-                DataStream::from_stream(body.compat().map(|result| match result {
+                DataStream::from_stream(body.map(|result| match result {
                     Ok(chunk) => Result::<Data, StorageError>::Ok(chunk.into_bytes()),
                     Err(e) => Result::<Data, StorageError>::Err(e.into()),
                 }))

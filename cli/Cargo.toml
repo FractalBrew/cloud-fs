@@ -9,5 +9,5 @@ file-store = { path = "../file-store" }
 clap = { version = "~2.33.0", features = ["yaml"] }
 yaml-rust = "^0.3.5"
 futures-preview = { version = "=0.3.0-alpha.18", features = ["async-await", "nightly"] }
-tokio = "=0.2.0-alpha.3"
+tokio = "=0.2.0-alpha.4"
 env_logger = "^0.6.2"

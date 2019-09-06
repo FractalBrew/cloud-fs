@@ -15,18 +15,16 @@ use std::sync::Arc;
 
 use base64::encode;
 use futures::channel::oneshot::{channel, Sender};
-use futures::compat::*;
-use futures::future::{ready, FutureExt, TryFutureExt};
+use futures::future::FutureExt;
 use futures::lock::Mutex;
-use futures::stream::{iter, StreamExt, TryStreamExt};
+use futures::stream::{iter, TryStreamExt};
 use http::header;
 use http::header::HeaderMap;
 use http::request::Parts;
 use http::StatusCode;
 use hyper::server::Server;
-use hyper::service::service_fn;
+use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Chunk, Request, Response};
-use old_futures::future::{ExecuteError, Executor, Future as OldFuture};
 use serde_json::{from_slice, to_string_pretty};
 use sha1::Sha1;
 use tokio::spawn;
@@ -716,7 +714,7 @@ impl B2Server {
 
         Ok(Response::builder()
             .status(StatusCode::OK)
-            .body(Body::wrap_stream(Compat::new(iter(blocks))))
+            .body(Body::wrap_stream(iter(blocks)))
             .expect("Failed to build response."))
     }
 
@@ -764,7 +762,7 @@ impl B2Server {
         })
     }
 
-    async fn b2_upload_file(self, bucket_id: &str, head: Parts, body: Body) -> B2Result {
+    async fn b2_upload_file(self, bucket_id: &str, head: Parts, mut body: Body) -> B2Result {
         let file = match percent_decode(&header_or_error(&head.headers, "X-Bz-File-Name")?) {
             Ok(s) => s,
             Err(_) => return Err(B2Error::invalid_parameters("Filename was not valid utf-8.")),
@@ -784,12 +782,11 @@ impl B2Server {
         path.push(&file);
         let mut writer = File::create(&path)?;
 
-        let mut stream = body.compat();
         let mut length: Int = 0;
         let mut hasher = Sha1::new();
 
         loop {
-            match stream.next().await {
+            match body.next().await {
                 Some(Ok(chunk)) => {
                     writer.write_all(&chunk)?;
                     hasher.update(&chunk);
@@ -881,7 +878,7 @@ impl B2Server {
         }
     }
 
-    async fn b2_upload_part(self, file_id: String, head: Parts, body: Body) -> B2Result {
+    async fn b2_upload_part(self, file_id: String, head: Parts, mut body: Body) -> B2Result {
         let expected_sha1 = header_or_error(&head.headers, "X-Bz-Content-Sha1")?;
         let expected_length: u64 = match header_or_error(&head.headers, "Content-Length")?.parse() {
             Ok(len) => len,
@@ -906,13 +903,12 @@ impl B2Server {
             ));
         }
 
-        let mut stream = body.compat();
         let mut length: Int = 0;
         let mut hasher = Sha1::new();
         let mut data: Vec<Chunk> = Default::default();
 
         loop {
-            match stream.next().await {
+            match body.next().await {
                 Some(Ok(chunk)) => {
                     hasher.update(&chunk);
                     length += chunk.len() as Int;
@@ -1083,7 +1079,7 @@ impl B2Server {
 
             let method = &path[14..];
 
-            let data = body.compat().try_concat().await.map_err(|e| {
+            let data = body.try_concat().await.map_err(|e| {
                 B2Error::invalid_parameters(format!("Failed to receive entire body: {}", e))
             })?;
             self.call_api(method, head, data).await
@@ -1155,20 +1151,6 @@ impl B2Server {
     }
 }
 
-#[derive(Clone)]
-struct Spawner;
-
-impl<F> Executor<F> for Spawner
-where
-    F: OldFuture<Item = (), Error = ()> + Send + 'static,
-{
-    fn execute(&self, future: F) -> Result<(), ExecuteError<F>> {
-        spawn(future.compat().map(|_| ()));
-
-        Ok(())
-    }
-}
-
 pub fn start_server(root: PathBuf) -> TestResult<(SocketAddr, Sender<()>)> {
     let (shutdown_sender, shutdown_receiver) = channel::<()>();
 
@@ -1186,21 +1168,20 @@ pub fn start_server(root: PathBuf) -> TestResult<(SocketAddr, Sender<()>)> {
 
     let http_server = Server::from_tcp(listener)
         .expect("Failed to attach to tcp stream.")
-        .executor(Spawner {})
-        .serve(move || {
+        .serve(make_service_fn(move |_| {
             let server = b2_server.clone();
-            service_fn(move |req| {
-                let response = server
-                    .clone()
-                    .serve(req)
-                    .or_else(|e| ready(Ok(e.into()) as Result<Response<Body>, io::Error>));
-                Compat::new(Box::pin(response))
-            })
-        });
+            async {
+                Ok::<_, io::Error>(service_fn(move |request: Request<Body>| {
+                    server
+                        .clone()
+                        .serve(request)
+                        .map(|r| r.or_else(|e| Ok::<Response<Body>, io::Error>(e.into())))
+                }))
+            }
+        }));
 
     let server_future = http_server
-        .with_graceful_shutdown(shutdown_receiver.compat())
-        .compat()
+        .with_graceful_shutdown(shutdown_receiver.map(|_| ()))
         .map(|r| match r {
             Ok(()) => (),
             Err(e) => panic!(e.to_string()),
