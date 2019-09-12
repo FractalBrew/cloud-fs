@@ -1,7 +1,9 @@
 # file-store
 
-[![Azure DevOps builds](https://img.shields.io/azure-devops/build/FractalBrew/4572c68a-521b-44c3-bf78-88b056b098be/1)](https://dev.azure.com/FractalBrew/File%20Store/_build?definitionId=1)
-[![Coverage Status](https://coveralls.io/repos/github/FractalBrew/file-store-rs/badge.svg?branch=master)](https://coveralls.io/github/FractalBrew/file-store-rs?branch=master)
+[![Azure DevOps build status](https://img.shields.io/azure-devops/build/FractalBrew/4572c68a-521b-44c3-bf78-88b056b098be/1)](https://dev.azure.com/FractalBrew/File%20Store/_build?definitionId=1)
+[![Code coverage](https://img.shields.io/coveralls/github/FractalBrew/file-store-rs)](https://coveralls.io/github/FractalBrew/file-store-rs?branch=master)
+[![Open issues](https://img.shields.io/github/issues-raw/FractalBrew/file-store-rs)](https://github.com/FractalBrew/file-store-rs/issues)
+![Code status](https://img.shields.io/badge/status-pre--alpha-red)
 
 `file-store` is a Rust library providing asynchronous file storage. The files may be hosted locally or remotely. Different backends provide access to different storage systems including the local filesystem and storage in various cloud providers.
 
