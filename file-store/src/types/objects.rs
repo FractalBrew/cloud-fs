@@ -1,8 +1,9 @@
 //! Object types.
 
 use std::cmp::{Ordering, PartialOrd};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
+use std::time::SystemTime;
 
 use enum_dispatch::enum_dispatch;
 
@@ -110,7 +111,7 @@ impl Ord for Object {
             return order;
         }
 
-        self.size().cmp(&other.size())
+        self.len().cmp(&other.len())
     }
 }
 
@@ -123,11 +124,33 @@ pub trait ObjectInfo {
     /// Gets the object's path.
     fn path(&self) -> ObjectPath;
 
-    /// Gets the object's size.
-    fn size(&self) -> u64;
+    /// Gets the object's size in bytes.
+    fn len(&self) -> u64;
+
+    /// Checks if the object is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Gets the object's type.
     fn object_type(&self) -> ObjectType;
+
+    /// Gets the last modification time for the object.
+    fn modified(&self) -> Option<SystemTime>;
+
+    /// Creates an [`UploadInfo`](struct.UploadInfo.html) for uploading this
+    /// object to a new path.
+    fn as_upload<P>(&self, path: P) -> StorageResult<UploadInfo>
+    where
+        Self: Clone,
+        P: TryInto<ObjectPath>,
+        StorageError: From<P::Error>,
+    {
+        let path = path.try_into()?;
+        let mut info = UploadInfo::from(self.clone());
+        info.path = path;
+        Ok(info)
+    }
 }
 
 /// Information used to upload a file.
@@ -140,15 +163,12 @@ pub trait ObjectInfo {
 /// have `Into` implementations for this object so you may not need to create
 /// one of these manually enless there are specific properties you wish to
 /// change.
+#[derive(Clone, Debug)]
 pub struct UploadInfo {
-    path: ObjectPath,
-}
-
-impl UploadInfo {
-    /// Gets the path for the upload.
-    pub fn path(&self) -> ObjectPath {
-        self.path.clone()
-    }
+    /// The path to upload to.
+    pub path: ObjectPath,
+    /// Sets the last modified time for the file.
+    pub modified: Option<SystemTime>,
 }
 
 impl<I> From<I> for UploadInfo
@@ -156,13 +176,19 @@ where
     I: ObjectInfo,
 {
     fn from(info: I) -> UploadInfo {
-        UploadInfo { path: info.path() }
+        UploadInfo {
+            path: info.path(),
+            modified: info.modified(),
+        }
     }
 }
 
 impl From<ObjectPath> for UploadInfo {
     fn from(path: ObjectPath) -> UploadInfo {
-        UploadInfo { path }
+        UploadInfo {
+            path,
+            modified: None,
+        }
     }
 }
 

@@ -12,8 +12,10 @@ use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 use base64::encode;
+use filetime::{set_file_mtime, FileTime};
 use futures::channel::oneshot::{channel, Sender};
 use futures::future::FutureExt;
 use futures::lock::Mutex;
@@ -32,7 +34,9 @@ use uuid::Uuid;
 
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
-use storage_types::b2::v2::{percent_decode, BucketType, FileAction, Int};
+use storage_types::b2::v2::{
+    percent_decode, BucketType, FileAction, Int, UserFileInfo, FILE_INFO_PREFIX, LAST_MODIFIED_KEY,
+};
 
 use crate::runner::TestResult;
 
@@ -337,6 +341,16 @@ impl FileLister {
                             }
                         }
 
+                        let mut info = UserFileInfo::new();
+                        if let Ok(time) = meta.modified() {
+                            if let Ok(dur) = time.duration_since(UNIX_EPOCH) {
+                                info.insert(
+                                    LAST_MODIFIED_KEY.to_owned(),
+                                    dur.as_millis().to_string(),
+                                );
+                            }
+                        }
+
                         ListResult::Item(FileInfo {
                             account_id: TEST_ACCOUNT_ID.to_owned(),
                             action: FileAction::Upload,
@@ -345,7 +359,7 @@ impl FileLister {
                             content_sha1: None,
                             content_type: None,
                             file_id: Some(format!("{}{}", FILE_ID_PREFIX, entry.path().display())),
-                            file_info: Default::default(),
+                            file_info: info,
                             file_name: file_path,
                             upload_timestamp: 0,
                         })
@@ -777,6 +791,13 @@ impl B2Server {
             }
         };
 
+        let last_modified = head
+            .headers
+            .get(&format!("{}{}", FILE_INFO_PREFIX, LAST_MODIFIED_KEY))
+            .and_then(|t| t.to_str().ok())
+            .and_then(|t| t.parse::<u64>().ok())
+            .map(|d| UNIX_EPOCH + Duration::from_millis(d));
+
         let mut path = self.root.clone();
         path.push(&bucket_id[BUCKET_ID_PREFIX.len()..]);
         path.push(&file);
@@ -812,6 +833,15 @@ impl B2Server {
             return Err(B2Error::invalid_parameters(
                 "Expected hash did not match data.",
             ));
+        }
+
+        if let Some(time) = last_modified {
+            if let Err(e) = set_file_mtime(&path, FileTime::from_system_time(time)) {
+                return Err(B2Error::server_error(format!(
+                    "Failed to set file modification time: {}.",
+                    e
+                )));
+            }
         }
 
         api_response!(UploadFileResponse {

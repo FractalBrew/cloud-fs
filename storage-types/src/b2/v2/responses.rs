@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{BucketType, FileAction, Int, Map};
+use super::{BucketType, FileAction, Int, Map, UserFileInfo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,7 +79,7 @@ pub struct FileInfo {
     pub content_sha1: Option<String>,
     pub content_type: Option<String>,
     pub file_id: Option<String>,
-    pub file_info: Map,
+    pub file_info: UserFileInfo,
     pub file_name: String,
     pub upload_timestamp: Int,
 }

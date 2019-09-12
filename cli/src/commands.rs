@@ -70,7 +70,7 @@ pub fn ls(
                 println!(
                     "{:8}{:5} {}",
                     object.object_type(),
-                    object.size(),
+                    object.len(),
                     object.path()
                 );
                 ready(Ok(()))

@@ -2,7 +2,7 @@ pub mod v2 {
     pub mod requests;
     pub mod responses;
 
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::fmt;
     use std::str::Utf8Error;
 
@@ -13,6 +13,10 @@ pub mod v2 {
 
     pub type Int = u64;
     pub type Map = serde_json::Map<String, serde_json::Value>;
+    pub type UserFileInfo = HashMap<String, String>;
+
+    pub const FILE_INFO_PREFIX: &str = "X-Bz-Info-";
+    pub const LAST_MODIFIED_KEY: &str = "src_last_modified_millis";
 
     /// The set of characters to percent encode.
     ///

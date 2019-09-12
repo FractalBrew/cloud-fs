@@ -92,6 +92,9 @@ pub trait StorageBackend: Clone + Send + 'static {
     /// Normally this will be an efficient operation but in some cases it will
     /// require retrieving the entire file and then sending it to the new
     /// location.
+    ///
+    /// Various properties of the file such as last modification time may not be
+    /// copied to the new file.
     fn copy_file<P, I>(&self, source: P, target: I) -> CopyCompleteFuture
     where
         P: TryInto<ObjectPath>,
@@ -108,6 +111,9 @@ pub trait StorageBackend: Clone + Send + 'static {
     /// Normally this will be an efficient operation but in some cases it will
     /// require retrieving the entire file and then sending it to the new
     /// location.
+    ///
+    /// Various properties of the file such as last modification time may not be
+    /// copied to the new file.
     fn move_file<P, I>(&self, source: P, target: I) -> MoveCompleteFuture
     where
         P: TryInto<ObjectPath>,
@@ -176,15 +182,18 @@ pub trait StorageBackend: Clone + Send + 'static {
 /// Provides access to a storage backend.
 ///
 /// `FileStore` exposes all of the functionality guaranteed to be implemented by
-/// every backend. This is the type you should use if you want your code to be
-/// able to use any backend.
+/// every backend via the [`StorageBackend`](trait.StorageBackend.html) trait.
+/// Avoid using the backends directly if you want to keep your code compatible
+/// with all backends.
 ///
 /// You create a `FileStore` from one of the [backend implementations](backends/index.html).
 #[allow(clippy::large_enum_variant, missing_docs)]
 #[derive(Clone, Debug)]
 pub enum FileStore {
+    #[doc(hidden)]
     #[cfg(feature = "file")]
     File(FileBackend),
+    #[doc(hidden)]
     #[cfg(feature = "b2")]
     B2(B2Backend),
 }

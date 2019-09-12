@@ -1,5 +1,6 @@
-use std::fs::{metadata, File};
+use std::fs::{symlink_metadata, File};
 use std::io::{BufReader, ErrorKind, Read};
+use std::path::Path;
 
 use super::utils::*;
 use super::*;
@@ -7,24 +8,68 @@ use super::*;
 use file_store::backends::Backend;
 use file_store::*;
 
+fn test_file_matches<I>(target: &Path, info: UploadInfo, mut expected: I) -> TestResult<()>
+where
+    I: Iterator<Item = u8>,
+{
+    let meta = symlink_metadata(&target).map_err(TestError::from_error)?;
+
+    let mut found = BufReader::new(File::open(target).map_err(TestError::from_error)?).bytes();
+    let mut pos = 0;
+    loop {
+        match (found.next(), expected.next()) {
+            (Some(Err(e)), _) => {
+                return Err(TestError::from_error(e));
+            }
+            (Some(Ok(f)), Some(e)) => {
+                test_assert_eq!(
+                    f,
+                    e,
+                    "File content of {} at {} should have matched expected.",
+                    info.path,
+                    pos
+                );
+            }
+            (Some(_), None) => {
+                test_fail!("Found too many bytes in {}.", info.path);
+            }
+            (None, Some(_)) => {
+                test_fail!("Found too few bytes in {}.", info.path);
+            }
+            (None, None) => break,
+        }
+
+        pos += 1;
+    }
+
+    if let Some(time) = info.modified.as_ref() {
+        test_assert_eq!(
+            time,
+            &meta.modified().map_err(TestError::from_error)?,
+            "Should have seen the right modification time for {}.",
+            info.path
+        );
+    }
+
+    Ok(())
+}
+
 pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult<()> {
     async fn test_pass(
         fs: &FileStore,
         context: &TestContext,
         path: &str,
-        target: &str,
+        target: UploadInfo,
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
         let remote_current = context.get_path(path);
         let local_current = context.get_target(&remote_current);
-        let remote_target = context.get_path(target);
-        let local_target = context.get_target(&remote_target);
+        let local_target = context.get_target(&target.path);
 
-        fs.copy_file(remote_current.clone(), remote_target.clone())
-            .await?;
+        fs.copy_file(remote_current.clone(), target.clone()).await?;
 
-        let result = metadata(local_current.clone());
+        let result = symlink_metadata(local_current.clone());
         if let Ok(m) = result {
             test_assert!(m.is_file(), "File {} should still exist.", remote_current);
         } else {
@@ -34,35 +79,7 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
             );
         }
 
-        let mut found =
-            BufReader::new(File::open(&local_target).map_err(TestError::from_error)?).bytes();
-        let mut expected = ContentIterator::new(seed, length);
-        let mut pos = 0;
-        loop {
-            match (found.next(), expected.next()) {
-                (Some(Err(e)), _) => {
-                    return Err(TestError::from_error(e));
-                }
-                (Some(Ok(f)), Some(e)) => {
-                    test_assert_eq!(
-                        f,
-                        e,
-                        "File content of {} at {} should have matched expected.",
-                        remote_target,
-                        pos
-                    );
-                }
-                (Some(_), None) => {
-                    test_fail!("Found too many bytes in {}.", remote_target);
-                }
-                (None, Some(_)) => {
-                    test_fail!("Found too few bytes in {}.", remote_target);
-                }
-                (None, None) => break,
-            }
-
-            pos += 1;
-        }
+        test_file_matches(&local_target, target, ContentIterator::new(seed, length))?;
 
         Ok(())
     }
@@ -96,7 +113,7 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
             test_fail!("Expected to fail to copy {}.", remote_current);
         }
 
-        let result = metadata(local_target);
+        let result = symlink_metadata(local_target);
         if let Err(e) = result {
             test_assert_eq!(
                 e.kind(),
@@ -113,7 +130,10 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         fs,
         context,
         "test1/dir1/mediumfile",
-        "test1/dir1/testfile",
+        UploadInfo {
+            path: context.get_path("test1/dir1/testfile"),
+            modified: None,
+        },
         58,
         5 * MB,
     )
@@ -122,7 +142,10 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         fs,
         context,
         "test1/dir1/largefile",
-        "test1/dir1/dir2/hop",
+        UploadInfo {
+            path: context.get_path("test1/dir1/dir2/hop"),
+            modified: None,
+        },
         0,
         100 * MB,
     )
@@ -131,7 +154,10 @@ pub async fn test_copy_file(fs: &FileStore, context: &TestContext) -> TestResult
         fs,
         context,
         "test1/dir1/dir2/daz",
-        "test1/dir1/bazza",
+        UploadInfo {
+            path: context.get_path("test1/dir1/bazza"),
+            modified: Some(UNIX_EPOCH + Duration::from_millis(1_703_257_714)),
+        },
         72,
         300,
     )
@@ -148,52 +174,22 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         fs: &FileStore,
         context: &TestContext,
         path: &str,
-        target: &str,
+        target: UploadInfo,
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
         let remote_current = context.get_path(path);
         let local_current = context.get_target(&remote_current);
-        let remote_target = context.get_path(target);
-        let local_target = context.get_target(&remote_target);
+        let local_target = context.get_target(&target.path);
 
-        fs.move_file(remote_current.clone(), remote_target.clone())
-            .await?;
+        fs.move_file(remote_current.clone(), target.clone()).await?;
 
-        let result = metadata(local_current.clone());
+        let result = symlink_metadata(local_current.clone());
         if result.is_ok() {
             test_fail!("File {} should no longer exist.", remote_current);
         }
 
-        let mut found =
-            BufReader::new(File::open(&local_target).map_err(TestError::from_error)?).bytes();
-        let mut expected = ContentIterator::new(seed, length);
-        let mut pos = 0;
-        loop {
-            match (found.next(), expected.next()) {
-                (Some(Err(e)), _) => {
-                    return Err(TestError::from_error(e));
-                }
-                (Some(Ok(f)), Some(e)) => {
-                    test_assert_eq!(
-                        f,
-                        e,
-                        "File content of {} at {} should have matched expected.",
-                        remote_target,
-                        pos
-                    );
-                }
-                (Some(_), None) => {
-                    test_fail!("Found too many bytes in {}.", remote_target);
-                }
-                (None, Some(_)) => {
-                    test_fail!("Found too few bytes in {}.", remote_target);
-                }
-                (None, None) => break,
-            }
-
-            pos += 1;
-        }
+        test_file_matches(&local_target, target, ContentIterator::new(seed, length))?;
 
         Ok(())
     }
@@ -227,7 +223,7 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
             test_fail!("Expected to fail to copy {}.", remote_current);
         }
 
-        let result = metadata(local_target);
+        let result = symlink_metadata(local_target);
         if let Err(e) = result {
             test_assert_eq!(
                 e.kind(),
@@ -244,7 +240,10 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         fs,
         context,
         "test1/dir1/mediumfile",
-        "test1/dir1/testfile",
+        UploadInfo {
+            path: context.get_path("test1/dir1/testfile"),
+            modified: Some(UNIX_EPOCH + Duration::from_millis(1_703_257_714)),
+        },
         58,
         5 * MB,
     )
@@ -253,7 +252,10 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         fs,
         context,
         "test1/dir1/largefile",
-        "test1/dir1/dir2/hop",
+        UploadInfo {
+            path: context.get_path("test1/dir1/dir2/hop"),
+            modified: None,
+        },
         0,
         100 * MB,
     )
@@ -262,7 +264,10 @@ pub async fn test_move_file(fs: &FileStore, context: &TestContext) -> TestResult
         fs,
         context,
         "test1/dir1/dir2/daz",
-        "test1/dir1/bazza",
+        UploadInfo {
+            path: context.get_path("test1/dir1/bazza"),
+            modified: None,
+        },
         72,
         300,
     )
@@ -281,7 +286,7 @@ pub async fn test_delete_object(fs: &FileStore, context: &TestContext) -> TestRe
 
         fs.delete_object(remote).await?;
 
-        match metadata(target.clone()) {
+        match symlink_metadata(target.clone()) {
             Ok(m) => {
                 test_assert!(m.is_file(), "Failed to delete {}", target.display());
             }
@@ -312,7 +317,7 @@ pub async fn test_delete_object(fs: &FileStore, context: &TestContext) -> TestRe
             ),
         }
 
-        if let Ok(m) = metadata(target) {
+        if let Ok(m) = symlink_metadata(target) {
             test_assert!(m.is_dir(), "Shouldn't have deleted {}.", fspath);
         }
 
@@ -339,66 +344,56 @@ pub async fn test_write_file_from_stream(fs: &FileStore, context: &TestContext) 
     async fn test_write(
         fs: &FileStore,
         context: &TestContext,
-        path: &str,
+        target: UploadInfo,
         seed: u8,
         length: u64,
     ) -> TestResult<()> {
-        let remote = context.get_path(path);
-        let target = context.get_target(&remote);
+        let local_target = context.get_target(&target.path);
 
         fs.write_file_from_stream(
-            remote.clone(),
+            target.clone(),
             stream_iterator(ContentIterator::new(seed, length), (length / 10) as usize),
         )
         .await?;
 
-        let meta = metadata(target.clone());
-        test_assert!(meta.is_ok(), "Should have created the file {}.", remote);
-        if let Ok(m) = meta {
-            test_assert!(m.is_file(), "Should have written the file {}.", remote);
-            test_assert_eq!(
-                m.len(),
-                length,
-                "File {} should have the right length.",
-                remote
-            );
-        }
-
-        let mut found = BufReader::new(File::open(&target).map_err(TestError::from_error)?).bytes();
-        let mut expected = ContentIterator::new(seed, length);
-        let mut pos = 0;
-        loop {
-            match (found.next(), expected.next()) {
-                (Some(Err(e)), _) => {
-                    return Err(TestError::from_error(e));
-                }
-                (Some(Ok(f)), Some(e)) => {
-                    test_assert_eq!(
-                        f,
-                        e,
-                        "File content of {} at {} should have matched expected.",
-                        remote,
-                        pos
-                    );
-                }
-                (Some(_), None) => {
-                    test_fail!("Found too many bytes in {}.", remote);
-                }
-                (None, Some(_)) => {
-                    test_fail!("Found too few bytes in {}.", remote);
-                }
-                (None, None) => break,
-            }
-
-            pos += 1;
-        }
+        test_file_matches(&local_target, target, ContentIterator::new(seed, length))?;
 
         Ok(())
     }
 
-    test_write(fs, context, "test1/dir1/foobar", 58, 300).await?;
-    test_write(fs, context, "test1/dir1/maybedir", 27, 500).await?;
-    test_write(fs, context, "test1/dir1/dir2/daz", 27, 100 * MB).await?;
+    test_write(
+        fs,
+        context,
+        UploadInfo {
+            path: context.get_path("test1/dir1/foobar"),
+            modified: Some(UNIX_EPOCH + Duration::from_millis(1_703_257_714)),
+        },
+        58,
+        300,
+    )
+    .await?;
+    test_write(
+        fs,
+        context,
+        UploadInfo {
+            path: context.get_path("test1/dir1/maybedir"),
+            modified: None,
+        },
+        27,
+        500,
+    )
+    .await?;
+    test_write(
+        fs,
+        context,
+        UploadInfo {
+            path: context.get_path("test1/dir1/dir2/daz"),
+            modified: None,
+        },
+        27,
+        100 * MB,
+    )
+    .await?;
 
     Ok(())
 }

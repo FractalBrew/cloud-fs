@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{BucketTypes, Int, Map};
+use super::{BucketTypes, Int, UserFileInfo};
 
 pub const B2_API_HOST: &str = "https://api.backblazeb2.com";
 pub const B2_VERSION: &str = "v2";
@@ -60,7 +60,7 @@ pub struct StartLargeFileRequest {
     pub bucket_id: String,
     pub file_name: String,
     pub content_type: String,
-    pub file_info: Option<Map>,
+    pub file_info: Option<UserFileInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

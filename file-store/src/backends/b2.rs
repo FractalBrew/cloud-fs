@@ -37,6 +37,7 @@ use std::pin::Pin;
 use std::slice::Iter;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::encode;
 use bytes::buf::FromBuf;
@@ -57,7 +58,9 @@ use sha1::Sha1;
 
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
-use storage_types::b2::v2::{percent_encode, FileAction};
+use storage_types::b2::v2::{
+    percent_encode, FileAction, UserFileInfo, FILE_INFO_PREFIX, LAST_MODIFIED_KEY,
+};
 
 use super::Backend;
 use crate::types::future::{FuturePoll, ResultFuturePoll};
@@ -142,7 +145,7 @@ impl ObjectInfo for B2Object {
         self.path.clone()
     }
 
-    fn size(&self) -> u64 {
+    fn len(&self) -> u64 {
         self.versions.latest().content_length
     }
 
@@ -151,6 +154,27 @@ impl ObjectInfo for B2Object {
             FileAction::Upload => ObjectType::File,
             FileAction::Folder => ObjectType::Directory,
             _ => ObjectType::Unknown,
+        }
+    }
+
+    fn modified(&self) -> Option<SystemTime> {
+        match self
+            .versions
+            .latest()
+            .file_info
+            .get(LAST_MODIFIED_KEY)
+            .and_then(|s| {
+                let time = match s.parse::<u64>() {
+                    Ok(t) => t,
+                    Err(_) => return None,
+                };
+
+                Some(UNIX_EPOCH + Duration::from_millis(time))
+            }) {
+            Some(m) => Some(m),
+            None => {
+                Some(UNIX_EPOCH + Duration::from_millis(self.versions.latest().upload_timestamp))
+            }
         }
     }
 }
@@ -384,19 +408,26 @@ impl B2Client {
         auth: String,
         file_name: String,
         content_type: String,
+        info: UserFileInfo,
         length: u64,
         hash: String,
         stream: VecStream<StorageResult<Data>>,
     ) -> StorageResult<UploadFileResponse> {
-        let request = Request::builder()
+        let mut builder = Request::builder();
+        builder
             .method(Method::POST)
             .uri(url)
             .header("Authorization", auth)
             .header("X-Bz-File-Name", percent_encode(&file_name))
             .header("Content-Type", content_type)
             .header("Content-Length", length)
-            .header("X-Bz-Content-Sha1", hash)
-            .body(Body::wrap_stream(stream))?;
+            .header("X-Bz-Content-Sha1", hash);
+
+        for (key, value) in info {
+            builder.header(&format!("{}{}", FILE_INFO_PREFIX, key), value);
+        }
+
+        let request = builder.body(Body::wrap_stream(stream))?;
 
         self.basic_request("b2_upload_file", path, request).await
     }
@@ -501,10 +532,10 @@ struct LargeFileUploader {
 }
 
 impl LargeFileUploader {
-    fn new(client: B2Client, path: ObjectPath, bucket_id: &str, file: &str) -> LargeFileUploader {
+    fn new(client: B2Client, info: UploadInfo, bucket_id: &str, file: &str) -> LargeFileUploader {
         LargeFileUploader {
             client: client.clone(),
-            path: path.clone(),
+            path: info.path.clone(),
             done: false,
             parts: Default::default(),
             state: LargeFileState::Starting(Box::pin(WrappedFuture::<
@@ -512,7 +543,7 @@ impl LargeFileUploader {
             >::from_future(
                 LargeFileUploader::start_upload(
                     client,
-                    path,
+                    info,
                     bucket_id.to_owned(),
                     file.to_owned(),
                 ),
@@ -522,18 +553,30 @@ impl LargeFileUploader {
 
     async fn start_upload(
         client: B2Client,
-        path: ObjectPath,
+        info: UploadInfo,
         bucket_id: String,
         file_name: String,
     ) -> StorageResult<GetUploadPartUrlResponse> {
+        let mut file_info = UserFileInfo::new();
+        if let Some(time) = info.modified {
+            if let Ok(duration) = time.duration_since(UNIX_EPOCH) {
+                file_info.insert(
+                    LAST_MODIFIED_KEY.to_owned(),
+                    duration.as_millis().to_string(),
+                );
+            }
+        }
+
         let request = StartLargeFileRequest {
             bucket_id,
             file_name,
             content_type: String::from("b2/x-auto"),
-            file_info: None,
+            file_info: Some(file_info),
         };
 
-        let result = client.b2_start_large_file(path.clone(), request).await?;
+        let result = client
+            .b2_start_large_file(info.path.clone(), request)
+            .await?;
 
         let file_id = match result.file_id {
             Some(s) => s,
@@ -549,7 +592,7 @@ impl LargeFileUploader {
             file_id: file_id.clone(),
         };
 
-        client.b2_get_upload_part_url(path, request).await
+        client.b2_get_upload_part_url(info.path, request).await
     }
 
     async fn upload_part(
@@ -740,7 +783,7 @@ where
     maximum_small_file_size: u64,
     stream: Pin<Box<S>>,
     bucket_id: String,
-    path: ObjectPath,
+    info: UploadInfo,
     file: String,
     client: B2Client,
     buffers: Vec<Data>,
@@ -755,7 +798,7 @@ where
 {
     async fn small_upload(
         client: B2Client,
-        path: ObjectPath,
+        info: UploadInfo,
         bucket_id: String,
         file_name: String,
         mut data: Vec<Data>,
@@ -764,16 +807,27 @@ where
     ) -> StorageResult<()> {
         let response = client
             .clone()
-            .b2_get_upload_url(path.clone(), GetUploadUrlRequest { bucket_id })
+            .b2_get_upload_url(info.path.clone(), GetUploadUrlRequest { bucket_id })
             .await?;
+
+        let mut user_info = UserFileInfo::new();
+        if let Some(time) = info.modified.as_ref() {
+            if let Ok(duration) = time.duration_since(UNIX_EPOCH) {
+                user_info.insert(
+                    LAST_MODIFIED_KEY.to_owned(),
+                    duration.as_millis().to_string(),
+                );
+            }
+        }
 
         client
             .b2_upload_file(
-                path,
+                info.path,
                 response.upload_url,
                 response.authorization_token,
                 file_name,
                 String::from("b2/x-auto"),
+                user_info,
                 size,
                 hash,
                 VecStream::from(data.drain(..).map(Ok).collect()),
@@ -786,7 +840,7 @@ where
     async fn upload(
         client: B2Client,
         max_small_file_size: u64,
-        path: ObjectPath,
+        info: UploadInfo,
         bucket_id: String,
         file: String,
         stream: S,
@@ -803,7 +857,7 @@ where
                 state: UploadState::Buffering(Sha1::new()),
                 done: false,
                 client,
-                path,
+                info,
                 bucket_id,
                 file,
                 stream: Box::pin(stream),
@@ -857,7 +911,7 @@ where
                         self.state = UploadState::SmallFileUpload(Box::pin(
                             OperationCompleteFuture::from_future(Uploader::<S>::small_upload(
                                 self.client.clone(),
-                                self.path.clone(),
+                                self.info.clone(),
                                 self.bucket_id.clone(),
                                 self.file.clone(),
                                 self.buffers.drain(..).collect(),
@@ -889,7 +943,7 @@ where
                     let target = self.maximum_small_file_size;
                     let mut lf = LargeFileUploader::new(
                         self.client.clone(),
-                        self.path.clone(),
+                        self.info.clone(),
                         &self.bucket_id,
                         &self.file,
                     );
@@ -1519,21 +1573,21 @@ impl StorageBackend for B2Backend {
             client: B2Client,
             max_small_file_size: u64,
             prefix: ObjectPath,
-            path: ObjectPath,
+            info: UploadInfo,
             stream: S,
         ) -> Result<(), TransferError>
         where
             S: Stream<Item = StorageResult<Data>> + Send + 'static,
         {
             let (bucket, file) =
-                B2Backend::expand_path(client.clone(), prefix.clone(), path.clone())
+                B2Backend::expand_path(client.clone(), prefix.clone(), info.path.clone())
                     .await
                     .map_err(TransferError::SourceError)?;
 
             Uploader::upload(
                 client,
                 max_small_file_size,
-                path,
+                info,
                 bucket.bucket_id,
                 file,
                 stream,
@@ -1548,7 +1602,7 @@ impl StorageBackend for B2Backend {
             }
         };
 
-        let path = info.path();
+        let path = info.path.clone();
         if path.is_dir_prefix() {
             return WriteCompleteFuture::from_value(Err(TransferError::TargetError(
                 error::invalid_path(
@@ -1562,7 +1616,7 @@ impl StorageBackend for B2Backend {
             self.client(),
             self.settings.max_small_file_size,
             self.settings.prefix.clone(),
-            path,
+            info,
             into_data_stream(stream),
         ))
     }

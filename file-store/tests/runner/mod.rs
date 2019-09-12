@@ -8,7 +8,9 @@ use std::fs::create_dir_all;
 use std::future::Future;
 use std::iter::empty;
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use filetime::{set_file_mtime, FileTime};
 use futures::future::FutureExt;
 use tempfile::{tempdir, TempDir};
 use tokio::executor::spawn as tokio_spawn;
@@ -19,6 +21,16 @@ use utils::*;
 
 use file_store::backends::Backend;
 use file_store::*;
+
+#[allow(non_snake_case)]
+pub fn LARGE_FILE_MODIFIED() -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(1_568_259_129)
+}
+
+#[allow(non_snake_case)]
+pub fn SMALL_FILE_MODIFIED() -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(1_603_257_714)
+}
 
 pub type TestResult<I> = Result<I, TestError>;
 
@@ -162,12 +174,14 @@ pub fn prepare_test(backend: Backend, test_root: &str) -> TestResult<TestContext
     dir.push("dir1");
     create_dir_all(dir.clone()).into_test_result()?;
 
-    write_file(
+    let file = write_file(
         &dir,
         "smallfile.txt",
         b"This is quite a short file.".iter().cloned(),
     )?;
-    write_file(&dir, "largefile", ContentIterator::new(0, 100 * MB))?;
+    set_file_mtime(file, FileTime::from_system_time(SMALL_FILE_MODIFIED())).into_test_result()?;
+    let file = write_file(&dir, "largefile", ContentIterator::new(0, 100 * MB))?;
+    set_file_mtime(file, FileTime::from_system_time(LARGE_FILE_MODIFIED())).into_test_result()?;
     write_file(&dir, "mediumfile", ContentIterator::new(58, 5 * MB))?;
 
     if backend == Backend::File {

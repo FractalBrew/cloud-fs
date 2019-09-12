@@ -17,11 +17,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::SystemTime;
 
 use bytes::IntoBuf;
+use filetime::{set_file_mtime, FileTime};
 use futures::future::{ready, Future, FutureExt, TryFutureExt};
 use futures::stream::{empty, once, Stream, StreamExt, TryStreamExt};
-use log::trace;
+use log::{trace, warn};
 use tokio_fs::DirEntry;
 use tokio_io::AsyncWriteExt;
 
@@ -156,8 +158,9 @@ where
 #[derive(Clone, Debug)]
 pub struct FileObject {
     path: ObjectPath,
-    size: u64,
+    len: u64,
     object_type: ObjectType,
+    metadata: Option<Metadata>,
 }
 
 impl ObjectInfo for FileObject {
@@ -165,18 +168,22 @@ impl ObjectInfo for FileObject {
         self.path.clone()
     }
 
-    fn size(&self) -> u64 {
-        self.size
+    fn len(&self) -> u64 {
+        self.len
     }
 
     fn object_type(&self) -> ObjectType {
         self.object_type
     }
+
+    fn modified(&self) -> Option<SystemTime> {
+        self.metadata.as_ref().and_then(|m| m.modified().ok())
+    }
 }
 
 fn get_object(path: ObjectPath, metadata: Option<Metadata>) -> Object {
-    let (object_type, size) = match metadata {
-        Some(m) => {
+    let (object_type, len) = match metadata {
+        Some(ref m) => {
             if m.is_file() {
                 (ObjectType::File, m.len())
             } else if m.is_dir() {
@@ -190,8 +197,9 @@ fn get_object(path: ObjectPath, metadata: Option<Metadata>) -> Object {
 
     Object::from(FileObject {
         path,
-        size,
+        len,
         object_type,
+        metadata,
     })
 }
 
@@ -554,36 +562,36 @@ impl StorageBackend for FileBackend {
     {
         async fn write<S>(
             space: FileSpace,
-            path: ObjectPath,
+            info: UploadInfo,
             mut stream: S,
         ) -> Result<(), TransferError>
         where
             S: Stream<Item = StorageResult<Data>> + Send + Unpin + 'static,
         {
             let target = space
-                .get_std_path(&path)
+                .get_std_path(&info.path)
                 .map_err(TransferError::TargetError)?;
 
             match symlink_metadata(target.clone()).await {
                 Ok(m) => {
                     if m.is_dir() {
-                        delete_directory(space, path.clone())
+                        delete_directory(space, info.path.clone())
                             .await
                             .map_err(TransferError::TargetError)?;
                     } else {
-                        wrap_future(remove_file(target.clone()), path.clone())
+                        wrap_future(remove_file(target.clone()), info.path.clone())
                             .await
                             .map_err(TransferError::TargetError)?;
                     }
                 }
                 Err(e) => {
                     if e.kind() != io::ErrorKind::NotFound {
-                        return Err(TransferError::TargetError(get_storage_error(e, path)));
+                        return Err(TransferError::TargetError(get_storage_error(e, info.path)));
                     }
                 }
             };
 
-            let mut file = wrap_future(File::create(target), path.clone())
+            let mut file = wrap_future(File::create(target.clone()), info.path.clone())
                 .await
                 .map_err(TransferError::TargetError)?;
 
@@ -594,10 +602,7 @@ impl StorageBackend for FileBackend {
                     match file.write_all(&data).await {
                         Ok(()) => (),
                         Err(e) => {
-                            return Err(TransferError::TargetError(get_storage_error(
-                                e,
-                                path.clone(),
-                            )))
+                            return Err(TransferError::TargetError(get_storage_error(e, info.path)))
                         }
                     };
                 } else {
@@ -607,20 +612,17 @@ impl StorageBackend for FileBackend {
 
             match file.flush().await {
                 Ok(()) => (),
-                Err(e) => {
-                    return Err(TransferError::TargetError(get_storage_error(
-                        e,
-                        path.clone(),
-                    )))
-                }
+                Err(e) => return Err(TransferError::TargetError(get_storage_error(e, info.path))),
             }
+
             match file.shutdown().await {
                 Ok(()) => (),
-                Err(e) => {
-                    return Err(TransferError::TargetError(get_storage_error(
-                        e,
-                        path.clone(),
-                    )))
+                Err(e) => return Err(TransferError::TargetError(get_storage_error(e, info.path))),
+            }
+
+            if let Some(time) = info.modified {
+                if let Err(e) = set_file_mtime(&target, FileTime::from_system_time(time)) {
+                    warn!("Failed to set file modification time: {}", e);
                 }
             }
 
@@ -636,7 +638,7 @@ impl StorageBackend for FileBackend {
 
         WriteCompleteFuture::from_future(write(
             self.space.clone(),
-            info.path(),
+            info,
             Box::pin(into_data_stream(stream)),
         ))
     }

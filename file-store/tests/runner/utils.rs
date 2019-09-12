@@ -164,14 +164,14 @@ impl Iterator for ContentIterator {
     }
 }
 
-pub fn write_file<I>(dir: &PathBuf, name: &str, content: I) -> TestResult<()>
+pub fn write_file<I>(dir: &PathBuf, name: &str, content: I) -> TestResult<PathBuf>
 where
     I: IntoIterator<Item = u8>,
 {
     let mut target = dir.clone();
     target.push(name);
 
-    let file = File::create(target).into_test_result()?;
+    let file = File::create(&target).into_test_result()?;
     let mut writer = BufWriter::new(file);
 
     for b in content {
@@ -184,5 +184,5 @@ where
 
     writer.flush().into_test_result()?;
 
-    Ok(())
+    Ok(target)
 }
