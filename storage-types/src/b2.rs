@@ -15,7 +15,11 @@ pub mod v2 {
     pub type Map = serde_json::Map<String, serde_json::Value>;
     pub type UserFileInfo = HashMap<String, String>;
 
-    pub const FILE_INFO_PREFIX: &str = "X-Bz-Info-";
+    pub const B2_HEADER_FILE_INFO_PREFIX: &str = "X-Bz-Info-";
+    pub const B2_HEADER_FILE_NAME: &str = "X-Bz-File-Name";
+    pub const B2_HEADER_CONTENT_SHA1: &str = "X-Bz-Content-Sha1";
+    pub const B2_HEADER_PART_NUMBER: &str = "X-Bz-Part-Number";
+
     pub const LAST_MODIFIED_KEY: &str = "src_last_modified_millis";
 
     /// The set of characters to percent encode.

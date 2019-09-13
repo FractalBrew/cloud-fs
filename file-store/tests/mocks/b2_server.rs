@@ -21,7 +21,7 @@ use futures::future::FutureExt;
 use futures::lock::Mutex;
 use futures::stream::{iter, TryStreamExt};
 use http::header;
-use http::header::HeaderMap;
+use http::header::{AsHeaderName, HeaderMap};
 use http::request::Parts;
 use http::StatusCode;
 use hyper::server::Server;
@@ -35,7 +35,8 @@ use uuid::Uuid;
 use storage_types::b2::v2::requests::*;
 use storage_types::b2::v2::responses::*;
 use storage_types::b2::v2::{
-    percent_decode, BucketType, FileAction, Int, UserFileInfo, FILE_INFO_PREFIX, LAST_MODIFIED_KEY,
+    percent_decode, BucketType, FileAction, Int, UserFileInfo, B2_HEADER_CONTENT_SHA1,
+    B2_HEADER_FILE_INFO_PREFIX, B2_HEADER_FILE_NAME, B2_HEADER_PART_NUMBER, LAST_MODIFIED_KEY,
 };
 
 use crate::runner::TestResult;
@@ -45,7 +46,7 @@ const TEST_KEY: &str = "bar";
 const TEST_ACCOUNT_ID: &str = "foobarbaz";
 
 /// How many uses can an auth token see before it expires?
-const AUTH_TIMEOUT: usize = 2;
+const AUTH_TIMEOUT: usize = 10000;
 const DEFAULT_FILE_COUNT: usize = 2;
 const BUCKET_ID_PREFIX: &str = "bkt_";
 const FILE_ID_PREFIX: &str = "id_";
@@ -206,8 +207,11 @@ impl<R> IntoPathError<R> for Result<R, io::Error> {
     }
 }
 
-fn header_or_error(headers: &HeaderMap, name: &str) -> Result<String, B2Error> {
-    match headers.get(name) {
+fn header_or_error<I>(headers: &HeaderMap, name: I) -> Result<String, B2Error>
+where
+    I: AsHeaderName + Display + Clone,
+{
+    match headers.get(name.clone()) {
         Some(val) => match val.to_str() {
             Ok(s) => Ok(s.to_owned()),
             Err(_) => Err(B2Error::invalid_parameters(format!(
@@ -777,23 +781,27 @@ impl B2Server {
     }
 
     async fn b2_upload_file(self, bucket_id: &str, head: Parts, mut body: Body) -> B2Result {
-        let file = match percent_decode(&header_or_error(&head.headers, "X-Bz-File-Name")?) {
+        let file = match percent_decode(&header_or_error(&head.headers, B2_HEADER_FILE_NAME)?) {
             Ok(s) => s,
             Err(_) => return Err(B2Error::invalid_parameters("Filename was not valid utf-8.")),
         };
-        let expected_sha1 = header_or_error(&head.headers, "X-Bz-Content-Sha1")?;
-        let expected_length: u64 = match header_or_error(&head.headers, "Content-Length")?.parse() {
-            Ok(len) => len,
-            Err(_) => {
-                return Err(B2Error::invalid_parameters(
-                    "Content-Length header could not be parsed.",
-                ))
-            }
-        };
+        let expected_sha1 = header_or_error(&head.headers, B2_HEADER_CONTENT_SHA1)?;
+        let expected_length: u64 =
+            match header_or_error(&head.headers, header::CONTENT_LENGTH)?.parse() {
+                Ok(len) => len,
+                Err(_) => {
+                    return Err(B2Error::invalid_parameters(
+                        "Content-Length header could not be parsed.",
+                    ))
+                }
+            };
 
         let last_modified = head
             .headers
-            .get(&format!("{}{}", FILE_INFO_PREFIX, LAST_MODIFIED_KEY))
+            .get(&format!(
+                "{}{}",
+                B2_HEADER_FILE_INFO_PREFIX, LAST_MODIFIED_KEY
+            ))
             .and_then(|t| t.to_str().ok())
             .and_then(|t| t.parse::<u64>().ok())
             .map(|d| UNIX_EPOCH + Duration::from_millis(d));
@@ -909,23 +917,25 @@ impl B2Server {
     }
 
     async fn b2_upload_part(self, file_id: String, head: Parts, mut body: Body) -> B2Result {
-        let expected_sha1 = header_or_error(&head.headers, "X-Bz-Content-Sha1")?;
-        let expected_length: u64 = match header_or_error(&head.headers, "Content-Length")?.parse() {
-            Ok(len) => len,
-            Err(_) => {
-                return Err(B2Error::invalid_parameters(
-                    "Content-Length header could not be parsed.",
-                ))
-            }
-        };
-        let part_number: usize = match header_or_error(&head.headers, "X-Bz-Part-Number")?.parse() {
-            Ok(len) => len,
-            Err(_) => {
-                return Err(B2Error::invalid_parameters(
-                    "X-Bz-Part-Number header could not be parsed.",
-                ))
-            }
-        };
+        let expected_sha1 = header_or_error(&head.headers, B2_HEADER_CONTENT_SHA1)?;
+        let expected_length: u64 =
+            match header_or_error(&head.headers, header::CONTENT_LENGTH)?.parse() {
+                Ok(len) => len,
+                Err(_) => {
+                    return Err(B2Error::invalid_parameters(
+                        "Content-Length header could not be parsed.",
+                    ))
+                }
+            };
+        let part_number: usize =
+            match header_or_error(&head.headers, B2_HEADER_PART_NUMBER)?.parse() {
+                Ok(len) => len,
+                Err(_) => {
+                    return Err(B2Error::invalid_parameters(
+                        "X-Bz-Part-Number header could not be parsed.",
+                    ))
+                }
+            };
 
         if part_number < 1 {
             return Err(B2Error::invalid_parameters(
@@ -1041,24 +1051,26 @@ impl B2Server {
 
     async fn check_auth(&self, auth: &str) -> Result<(), B2Error> {
         let mut state = self.state.lock().await;
-        match state.authorizations.remove(auth) {
-            Some(c) => {
-                if c < AUTH_TIMEOUT {
-                    state.authorizations.insert(auth.to_owned(), c + 1);
-                    Ok(())
-                } else {
-                    Err(B2Error::new(
-                        StatusCode::UNAUTHORIZED,
-                        "expired_auth_token",
-                        "Auth token has expired.",
-                    ))
-                }
+        let count = match state.authorizations.get(auth) {
+            Some(c) => c.to_owned(),
+            _ => {
+                return Err(B2Error::new(
+                    StatusCode::UNAUTHORIZED,
+                    "unauthorized",
+                    "Unknown auth token.",
+                ))
             }
-            None => Err(B2Error::new(
+        };
+
+        if count < AUTH_TIMEOUT {
+            state.authorizations.insert(auth.to_owned(), count + 1);
+            Ok(())
+        } else {
+            Err(B2Error::new(
                 StatusCode::UNAUTHORIZED,
-                "unauthorized",
-                "Unknown auth token.",
-            )),
+                "expired_auth_token",
+                "Auth token has expired.",
+            ))
         }
     }
 
@@ -1133,7 +1145,7 @@ impl B2Server {
                             return Err(B2Error::new(
                                 StatusCode::UNAUTHORIZED,
                                 "unauthorized",
-                                "Unknown auth token.",
+                                "Unknown upload auth token for bucket.",
                             ));
                         }
                     }
@@ -1141,7 +1153,7 @@ impl B2Server {
                         return Err(B2Error::new(
                             StatusCode::UNAUTHORIZED,
                             "unauthorized",
-                            "Unknown auth token.",
+                            "Unknown upload auth token.",
                         ));
                     }
                 }
@@ -1170,7 +1182,7 @@ impl B2Server {
                     return Err(B2Error::new(
                         StatusCode::UNAUTHORIZED,
                         "unauthorized",
-                        "Unknown auth token.",
+                        "Unknown part auth token.",
                     ));
                 }
             }

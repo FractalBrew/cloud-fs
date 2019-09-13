@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use filetime::{set_file_mtime, FileTime};
 use futures::future::FutureExt;
+use std::sync::Once;
 use tempfile::{tempdir, TempDir};
 use tokio::executor::spawn as tokio_spawn;
 use tokio::runtime::current_thread::Runtime;
@@ -21,6 +22,8 @@ use utils::*;
 
 use file_store::backends::Backend;
 use file_store::*;
+
+pub static INIT: Once = Once::new();
 
 #[allow(non_snake_case)]
 pub fn LARGE_FILE_MODIFIED() -> SystemTime {
@@ -219,6 +222,7 @@ macro_rules! make_test {
     ($root:expr, $backend:expr, $pkg:ident, $name:ident, $setup:expr, $cleanup:expr) => {
         #[test]
         fn $name() {
+            crate::runner::INIT.call_once(env_logger::init);
             let result: crate::runner::TestResult<()> = crate::runner::run(async {
                 let test_context = crate::runner::prepare_test($backend, $root)?;
                 let (fs, backend_context) = $setup(&test_context).await?;
