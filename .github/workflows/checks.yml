@@ -6,7 +6,7 @@ jobs:
   test:
     strategy:
       matrix:
-        rust-toolchain: [nightly-2019-09-01]
+        rust_toolchain: [nightly-2019-09-01]
         os: [macOS-latest]
 
     runs-on: ${{ matrix.os }}
@@ -15,7 +15,7 @@ jobs:
     - name: Setup rust
       uses: hecrj/setup-rust-action@v1.1.0
       with:
-        rust-version: ${{ rust-toolchain }}
+        rust-version: ${{ rust_toolchain }}
     - uses: actions/checkout@v1
     - name: Show toolchain
       run: rustup show
