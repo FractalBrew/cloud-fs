@@ -1,6 +1,6 @@
 # file-store
 
-[![Azure DevOps build status](https://img.shields.io/azure-devops/build/FractalBrew/4572c68a-521b-44c3-bf78-88b056b098be/1)](https://dev.azure.com/FractalBrew/File%20Store/_build?definitionId=1)
+[![Build status](https://github.com/FractalBrew/file-store-rs/workflows/Checks/badge.svg)](https://github.com/FractalBrew/file-store-rs/actions)
 [![Code coverage](https://img.shields.io/coveralls/github/FractalBrew/file-store-rs)](https://coveralls.io/github/FractalBrew/file-store-rs?branch=master)
 [![Open issues](https://img.shields.io/github/issues-raw/FractalBrew/file-store-rs)](https://github.com/FractalBrew/file-store-rs/issues)
 ![Code status](https://img.shields.io/badge/status-pre--alpha-red)
