@@ -74,7 +74,7 @@ type StringFuture = WrappedFuture<StorageResult<String>>;
 
 const API_RETRIES: usize = 3;
 const TOTAL_MAX_SMALL_FILE_SIZE: u64 = 5 * 1000 * 1000 * 1000;
-const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 1000 * 1000 * 1000;
+const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 200 * 1000 * 1000;
 
 impl From<http::Error> for StorageError {
     fn from(error: http::Error) -> StorageError {
