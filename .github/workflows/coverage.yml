@@ -24,6 +24,8 @@ jobs:
       run: cargo tarpaulin --release --ciserver azure --coveralls $COVERALLS_TOKEN --ignore-tests
       env:
         CI_NAME: github
+        CI_BUILD_NUMBER: ${{ github.sha }}
+        CI_JOB_ID: ${{ github.sha }}
         CI_BUILD_URL: https://github.com/FractalBrew/file-store-rs/commit/${{ github.sha }}/checks
         CI_BRANCH: master
         COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}

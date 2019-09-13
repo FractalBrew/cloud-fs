@@ -2,7 +2,7 @@
 
 use std::cmp::Ord;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Display;
 use std::fs::{metadata, read, read_dir, remove_file, DirEntry, File};
@@ -411,7 +411,7 @@ impl Iterator for FileLister {
 struct LargeUpload {
     file_name: String,
     bucket_id: String,
-    auth: String,
+    auth: HashSet<String>,
     parts: HashMap<usize, (Vec<Chunk>, String)>,
 }
 
@@ -420,7 +420,7 @@ impl LargeUpload {
         LargeUpload {
             file_name: file_name.to_owned(),
             bucket_id: bucket_id.to_owned(),
-            auth: Uuid::new_v4().to_string(),
+            auth: Default::default(),
             parts: Default::default(),
         }
     }
@@ -905,13 +905,18 @@ impl B2Server {
     }
 
     async fn b2_get_upload_part_url(self, _head: Parts, body: GetUploadPartUrlRequest) -> B2Result {
-        let state = self.state.lock().await;
-        match state.large_uploads.get(&body.file_id) {
-            Some(upload) => api_response!(GetUploadPartUrlResponse {
-                authorization_token: upload.auth.clone(),
-                file_id: body.file_id.clone(),
-                upload_url: format!("http://{}/upload/part/{}", self.addr, body.file_id),
-            }),
+        let mut state = self.state.lock().await;
+        match state.large_uploads.get_mut(&body.file_id) {
+            Some(upload) => {
+                let auth = Uuid::new_v4().to_string();
+                upload.auth.insert(auth.clone());
+
+                api_response!(GetUploadPartUrlResponse {
+                    authorization_token: auth,
+                    file_id: body.file_id.clone(),
+                    upload_url: format!("http://{}/upload/part/{}", self.addr, body.file_id),
+                })
+            }
             None => Err(B2Error::invalid_parameters("Unknown file id.")),
         }
     }
@@ -1098,13 +1103,16 @@ impl B2Server {
         };
 
         let auth = match head.headers.get(header::AUTHORIZATION) {
-            Some(a) => a.to_str().map_err(|e| {
-                B2Error::new(
-                    StatusCode::UNAUTHORIZED,
-                    "unauthorized",
-                    format!("Request contained an invalid authorization: {}", e),
-                )
-            })?,
+            Some(a) => a
+                .to_str()
+                .map_err(|e| {
+                    B2Error::new(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        format!("Request contained an invalid authorization: {}", e),
+                    )
+                })?
+                .to_owned(),
             None => {
                 return Err(B2Error::new(
                     StatusCode::UNAUTHORIZED,
@@ -1137,11 +1145,15 @@ impl B2Server {
             }
 
             let bucket_id = path[13..].to_owned();
+            let mutex = self.state.clone();
+
             {
-                let state = self.state.lock().await;
-                match state.upload_authorizations.get(auth) {
+                let mut state = mutex.lock().await;
+                // Remove the authorization so it cannot be used while this
+                // transfer takes place.
+                match state.upload_authorizations.remove(&auth) {
                     Some(valid_id) => {
-                        if valid_id != &bucket_id {
+                        if valid_id != bucket_id {
                             return Err(B2Error::new(
                                 StatusCode::UNAUTHORIZED,
                                 "unauthorized",
@@ -1159,8 +1171,15 @@ impl B2Server {
                 }
             }
 
-            let result = self.b2_upload_file(&bucket_id, head, body).await?;
-            Ok(result)
+            let result = self.b2_upload_file(&bucket_id, head, body).await;
+
+            {
+                // Re-add the authorization for later use.
+                let mut state = mutex.lock().await;
+                state.upload_authorizations.insert(auth, bucket_id);
+            }
+
+            result
         } else if path.starts_with("/upload/part/") {
             if head.method != "POST" {
                 return Err(B2Error::method_not_allowed(
@@ -1169,16 +1188,19 @@ impl B2Server {
             }
 
             let file_id = path[13..].to_owned();
+            let mutex = self.state.clone();
             {
-                let state = self.state.lock().await;
-                let upload = match state.large_uploads.get(&file_id) {
+                let mut state = mutex.lock().await;
+                let upload = match state.large_uploads.get_mut(&file_id) {
                     Some(upload) => upload,
                     None => {
                         return Err(B2Error::invalid_parameters("Unknown large file ID."));
                     }
                 };
 
-                if auth != upload.auth {
+                // Remove the authorization so it cannot be used while this
+                // transfer takes place.
+                if !upload.auth.remove(&auth) {
                     return Err(B2Error::new(
                         StatusCode::UNAUTHORIZED,
                         "unauthorized",
@@ -1187,7 +1209,17 @@ impl B2Server {
                 }
             }
 
-            self.b2_upload_part(file_id, head, body).await
+            let result = self.b2_upload_part(file_id.clone(), head, body).await;
+
+            {
+                // Re-add the authorization for later use.
+                let mut state = mutex.lock().await;
+                if let Some(upload) = state.large_uploads.get_mut(&file_id) {
+                    upload.auth.insert(auth);
+                }
+            }
+
+            result
         } else {
             Err(B2Error::invalid_parameters("Invalid path requested."))
         }
