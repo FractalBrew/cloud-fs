@@ -22,6 +22,7 @@ mod test1 {
         let fs = B2Backend::builder("foo", "bar")
             .host(&format!("http://{}", addr))
             .limit_small_file_size(20 * 1024 * 1024)
+            .limit_requests(5)
             .connect()
             .await?;
         Ok((fs, sender))

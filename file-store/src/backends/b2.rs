@@ -20,7 +20,7 @@
 //! * Deleting a file will delete all of its versions.
 //! * Replacing a file will add a new version.
 //!
-//! Setting a file's mimetype on uploas is not currently supported. The backend
+//! Setting a file's mimetype on upload is not currently supported. The backend
 //! will rely on B2's automatic mimetype detection to set the mimetype. This
 //! uses the file's extension to set a mimetype from a [list of mappings](https://www.backblaze.com/b2/docs/content-types.html)
 //! and falls back to `application/octet-stream` in case of failure.
@@ -50,6 +50,7 @@ use http::method::Method;
 use hyper::body::Body;
 use hyper::client::connect::HttpConnector;
 use hyper::client::Client as HyperClient;
+use hyper::Chunk;
 use hyper::{Request, Response};
 use hyper_tls::HttpsConnector;
 use log::{error, trace, warn};
@@ -66,9 +67,9 @@ use storage_types::b2::v2::{
 };
 
 use super::Backend;
-use crate::types::stream::{MergedStreams, ResultStreamPoll, VecStream};
+use crate::types::stream::{AfterStream, MergedStreams, ResultStreamPoll, VecStream};
 use crate::types::*;
-use crate::utils::into_data_stream;
+use crate::utils::{into_data_stream, Limit};
 use crate::{FileStore, StorageBackend};
 
 type Client = HyperClient<HttpsConnector<HttpConnector>>;
@@ -76,6 +77,7 @@ type Client = HyperClient<HttpsConnector<HttpConnector>>;
 const MAX_API_RETRIES: usize = 3;
 const TOTAL_MAX_SMALL_FILE_SIZE: u64 = 5 * 1000 * 1000 * 1000;
 const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 200 * 1000 * 1000;
+const DEFAULT_REQUEST_LIMIT: usize = 20;
 
 impl From<http::Error> for StorageError {
     fn from(error: http::Error) -> StorageError {
@@ -233,6 +235,7 @@ struct B2Client {
     settings: B2Settings,
     next_id: Arc<AtomicUsize>,
     state: Arc<Mutex<B2ClientState>>,
+    limiter: Limit,
 }
 
 impl Clone for B2Client {
@@ -243,6 +246,7 @@ impl Clone for B2Client {
             settings: self.settings.clone(),
             next_id: self.next_id.clone(),
             state: self.state.clone(),
+            limiter: self.limiter.clone(),
         }
     }
 }
@@ -300,6 +304,8 @@ impl B2Client {
     where
         R: DeserializeOwned + fmt::Debug,
     {
+        let mut limit = self.limiter.take().await;
+
         let response = self.request(method, path, request).await?;
         let (_, body) = response.into_parts();
 
@@ -307,6 +313,8 @@ impl B2Client {
         BlockingStreamReader::from_stream(body)
             .read_to_string(&mut data)
             .unwrap();
+
+        limit.release();
 
         match from_str(&data) {
             Ok(r) => {
@@ -400,7 +408,7 @@ impl B2Client {
         path: ObjectPath,
         bucket: String,
         file: String,
-    ) -> StorageResult<Body> {
+    ) -> StorageResult<impl Stream<Item = Result<Chunk, hyper::Error>>> {
         let mut tries: usize = 0;
         loop {
             let (download_url, authorization) = {
@@ -429,13 +437,17 @@ impl B2Client {
                 .header(header::AUTHORIZATION, &authorization)
                 .body(Body::empty())?;
 
+            let mut limit = self.limiter.take().await;
+
             match self
                 .request("b2_download_file_by_name", path.clone(), request)
                 .await
             {
                 Ok(response) => {
                     let (_, body) = response.into_parts();
-                    return Ok(body);
+                    let stream = AfterStream::after(body, move || limit.release());
+
+                    return Ok(stream);
                 }
                 Err(e) => {
                     if e.kind() == error::StorageErrorKind::AccessExpired {
@@ -735,7 +747,8 @@ where
     }
 
     trace!(
-        "All parts started for large file upload to {}, waiting for completion.",
+        "All parts ({}) started for large file upload to {}, waiting for completion.",
+        part_count,
         info.path
     );
     // Wait for parts to finish uploading.
@@ -754,7 +767,8 @@ where
     }
 
     trace!(
-        "All parts for large file upload to {} are complete.",
+        "All parts ({}) for large file upload to {} are complete.",
+        hashes.len(),
         info.path
     );
 
@@ -1066,6 +1080,7 @@ pub struct B2Backend {
     client: Client,
     next_id: Arc<AtomicUsize>,
     state: Arc<Mutex<B2ClientState>>,
+    limiter: Limit,
 }
 
 impl B2Backend {
@@ -1088,6 +1103,7 @@ impl B2Backend {
                 prefix: ObjectPath::empty(),
                 max_small_file_size: DEFAULT_MAX_SMALL_FILE_SIZE,
             },
+            max_requests: DEFAULT_REQUEST_LIMIT,
         }
     }
 
@@ -1100,6 +1116,7 @@ impl B2Backend {
             client: self.client.clone(),
             next_id: self.next_id.clone(),
             state: self.state.clone(),
+            limiter: self.limiter.clone(),
         }
     }
 
@@ -1139,6 +1156,7 @@ impl B2Backend {
 /// settings.
 pub struct B2BackendBuilder {
     settings: B2Settings,
+    max_requests: usize,
 }
 
 impl B2BackendBuilder {
@@ -1182,6 +1200,15 @@ impl B2BackendBuilder {
         self
     }
 
+    /// Limits the number of API requests that can be called in parallel.
+    ///
+    /// This also limits the number of parallel threads for downloads and
+    /// uploads.
+    pub fn limit_requests(mut self, requests: usize) -> B2BackendBuilder {
+        self.max_requests = requests;
+        self
+    }
+
     /// Creates a new B2 based [`FileStore`](../../enum.FileStore.html) using
     /// this builder's settings.
     pub fn connect(self) -> ConnectFuture {
@@ -1204,6 +1231,7 @@ impl B2BackendBuilder {
                 client,
                 next_id: Default::default(),
                 state: Arc::new(Mutex::new(Default::default())),
+                limiter: Limit::new(self.max_requests),
             };
 
             // Make sure we can connect.

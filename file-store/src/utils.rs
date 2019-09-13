@@ -1,8 +1,10 @@
 //! A set of useful utilities for converting between the different asynchronous
 //! types that this crate uses.
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use bytes::buf::FromBuf;
 use bytes::{BytesMut, IntoBuf};
@@ -101,4 +103,80 @@ where
         Ok(d) => Ok(Data::from_buf(d)),
         Err(e) => Err(e.into()),
     })
+}
+
+#[derive(Debug, Default)]
+struct LimitState {
+    available: usize,
+    wakers: Vec<Waker>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Limit {
+    state: Arc<Mutex<LimitState>>,
+}
+
+impl Limit {
+    pub fn new(count: usize) -> Limit {
+        Limit {
+            state: Arc::new(Mutex::new(LimitState {
+                available: count,
+                wakers: Default::default(),
+            })),
+        }
+    }
+
+    pub fn take(&self) -> LimitFuture {
+        LimitFuture {
+            state: self.state.clone(),
+        }
+    }
+}
+
+pub(crate) struct InUse {
+    state: Arc<Mutex<LimitState>>,
+    released: bool,
+}
+
+impl InUse {
+    pub fn release(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state.available += 1;
+
+        for waker in state.wakers.drain(..) {
+            waker.wake();
+        }
+
+        self.released = true;
+    }
+}
+
+impl Drop for InUse {
+    fn drop(&mut self) {
+        if !self.released {
+            self.release();
+        }
+    }
+}
+
+pub(crate) struct LimitFuture {
+    state: Arc<Mutex<LimitState>>,
+}
+
+impl Future for LimitFuture {
+    type Output = InUse;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<InUse> {
+        let mut state = self.state.lock().unwrap();
+        if state.available > 0 {
+            state.available -= 1;
+            Poll::Ready(InUse {
+                state: self.state.clone(),
+                released: false,
+            })
+        } else {
+            state.wakers.push(cx.waker().clone());
+            Poll::Pending
+        }
+    }
 }

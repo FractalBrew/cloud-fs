@@ -145,3 +145,46 @@ where
         }
     }
 }
+
+pub struct AfterStream<F, S>
+where
+    S: Unpin + Stream + 'static,
+    F: Unpin + FnOnce() -> (),
+{
+    inner: Pin<Box<S>>,
+    callback: Option<F>,
+}
+
+impl<F, S> AfterStream<F, S>
+where
+    S: Unpin + Stream + 'static,
+    F: Unpin + FnOnce() -> (),
+{
+    pub fn after(stream: S, f: F) -> AfterStream<F, S> {
+        AfterStream {
+            inner: Box::pin(stream),
+            callback: Some(f),
+        }
+    }
+}
+
+impl<F, S> Stream for AfterStream<F, S>
+where
+    S: Unpin + Stream + 'static,
+    F: Unpin + FnOnce() -> (),
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<S::Item>> {
+        let this = self.get_mut();
+        let result = this.inner.as_mut().poll_next(cx);
+
+        if let Poll::Ready(None) = result {
+            if let Some(callback) = this.callback.take() {
+                callback();
+            }
+        }
+
+        result
+    }
+}
