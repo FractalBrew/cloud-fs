@@ -3,12 +3,56 @@ name: Checks
 on: [push]
 
 jobs:
+  lint:
+    name: Lint code
+    runs-on: ubuntu-18.04
+    
+    steps:
+    - name: Setup rust
+      uses: hecrj/setup-rust-action@v1.1.0
+      with:
+        rust-version: nightly-2019-09-01
+        components: clippy
+    - uses: actions/checkout@v1
+    - name: Run clippy
+      run: cargo -q clippy --all-targets --all-features --message-format short -- -D warnings
+
+  fmt:
+    name: Check code style
+    runs-on: ubuntu-18.04
+    
+    steps:
+    - name: Setup rust
+      uses: hecrj/setup-rust-action@v1.1.0
+      with:
+        rust-version: nightly-2019-09-01
+        components: rustfmt
+    - uses: actions/checkout@v1
+    - name: Run clippy
+      run: cargo fmt --all -- --check
+
+  docs:
+    name: Verify documentation links
+    runs-on: ubuntu-18.04
+    
+    steps:
+    - name: Setup rust
+      uses: hecrj/setup-rust-action@v1.1.0
+      with:
+        rust-version: nightly-2019-09-01
+    - name: Install deadlinks
+      run: cargo install cargo-deadlinks
+    - uses: actions/checkout@v1
+    - name: Check docs
+      run: cargo doc --no-deps && cargo deadlinks --dir target/doc/file_store
+
   test:
     strategy:
       matrix:
         rust-toolchain: [nightly-2019-09-01]
-        os: [macOS-latest]
+        os: [windows-2019, ubuntu-18.04, macOS-latest]
 
+    name: Test on ${{ matrix.os }} with rust ${{ matrix.rust-toolchain }}
     runs-on: ${{ matrix.os }}
 
     steps:
