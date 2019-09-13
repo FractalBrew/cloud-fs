@@ -9,19 +9,45 @@ use super::*;
 
 use file_store::*;
 
-const MAX_TIME_DIFFERENCE: Duration = Duration::from_secs(1);
+const MAX_TIME_DIFFERENCE: u64 = 1;
 
 fn test_file_matches(target: &Path, object: Object) -> TestResult<()> {
     let meta = symlink_metadata(&target).map_err(TestError::from_error)?;
 
-    let found_size = match object.object_type() {
+    match object.object_type() {
         ObjectType::File => {
             test_assert!(
                 meta.is_file(),
                 "Should have seen the correct file type for {}.",
                 object.path()
             );
-            meta.len()
+
+            test_assert_eq!(
+                object.len(),
+                meta.len(),
+                "Should have seen the correct size."
+            );
+
+            if let Some(expected_modified) = object.modified() {
+                let modified = meta.modified().map_err(TestError::from_error)?;
+
+                let modified_difference = if modified > expected_modified {
+                    modified
+                        .duration_since(expected_modified)
+                        .map_err(TestError::from_error)?
+                } else {
+                    expected_modified
+                        .duration_since(modified)
+                        .map_err(TestError::from_error)?
+                };
+
+                if modified_difference.as_secs() > MAX_TIME_DIFFERENCE {
+                    test_fail!(
+                        "Should have seen the right modification time. Time differed by {} seconds.",
+                        modified_difference.as_secs()
+                    );
+                }
+            }
         }
         ObjectType::Directory => {
             test_assert!(
@@ -29,7 +55,13 @@ fn test_file_matches(target: &Path, object: Object) -> TestResult<()> {
                 "Should have seen the correct file type for {}.",
                 object.path()
             );
-            0
+
+            test_assert_eq!(object.len(), 0, "Directories should have no size.");
+            test_assert_eq!(
+                object.modified(),
+                None,
+                "Directories should have no modification time."
+            );
         }
         ObjectType::Symlink => {
             test_assert!(
@@ -37,7 +69,13 @@ fn test_file_matches(target: &Path, object: Object) -> TestResult<()> {
                 "Should have seen the correct file type for {}.",
                 object.path()
             );
-            0
+
+            test_assert_eq!(object.len(), 0, "Links should have no size.");
+            test_assert_eq!(
+                object.modified(),
+                None,
+                "Links should have no modification time."
+            );
         }
         ObjectType::Unknown => {
             test_fail!(
@@ -45,31 +83,6 @@ fn test_file_matches(target: &Path, object: Object) -> TestResult<()> {
                 object.path()
             );
         }
-    };
-
-    test_assert_eq!(
-        object.len(),
-        found_size,
-        "Should have seen the right size for {}.",
-        object.path()
-    );
-
-    if let Some(expected_modified) = object.modified() {
-        let modified = meta.modified().map_err(TestError::from_error)?;
-        test_assert!(
-            if modified > expected_modified {
-                modified
-                    .duration_since(expected_modified)
-                    .map_err(TestError::from_error)?
-                    < MAX_TIME_DIFFERENCE
-            } else {
-                expected_modified
-                    .duration_since(modified)
-                    .map_err(TestError::from_error)?
-                    < MAX_TIME_DIFFERENCE
-            },
-            "Should have seen the right modification time.",
-        );
     }
 
     Ok(())

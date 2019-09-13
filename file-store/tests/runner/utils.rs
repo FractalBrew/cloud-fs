@@ -35,13 +35,6 @@ macro_rules! test_assert {
             ));
         }
     }};
-    ($check:expr, $message:expr) => {{
-        if !$check {
-            return Err(crate::runner::TestError::TestFailure(
-                format!("assertion failed: `{}` at {}:{}: {}", stringify!($check), file!(), line!(), $message)
-            ));
-        }
-    }};
     ($check:expr, $($info:tt)*) => {{
         if !$check {
             return Err(crate::runner::TestError::TestFailure(
@@ -60,16 +53,6 @@ macro_rules! test_assert_eq {
             return Err(crate::runner::TestError::TestFailure(
                 format!("assertion failed: `{} == {}` at {}:{}\n    found: `{:?}`\n expected: `{:?}`",
                     stringify!($f), stringify!($e), file!(), line!(), found, expected),
-            ));
-        }
-    }};
-    ($f:expr, $e:expr, $message:expr) => {{
-        let found = $f;
-        let expected = $e;
-        if found != expected {
-            return Err(crate::runner::TestError::TestFailure(
-                format!("assertion failed: `{} == {}` at {}:{}: {}\n    found: `{:?}`\n expected: `{:?}`",
-                    stringify!($f), stringify!($e), file!(), line!(), $message, found, expected),
             ));
         }
     }};

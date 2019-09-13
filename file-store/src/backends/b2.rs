@@ -158,9 +158,12 @@ impl ObjectInfo for B2Object {
     }
 
     fn modified(&self) -> Option<SystemTime> {
-        match self
-            .versions
-            .latest()
+        let version = self.versions.latest();
+        if version.action != FileAction::Upload {
+            return None;
+        }
+
+        version
             .file_info
             .get(LAST_MODIFIED_KEY)
             .and_then(|s| {
@@ -170,12 +173,14 @@ impl ObjectInfo for B2Object {
                 };
 
                 Some(UNIX_EPOCH + Duration::from_millis(time))
-            }) {
-            Some(m) => Some(m),
-            None => {
-                Some(UNIX_EPOCH + Duration::from_millis(self.versions.latest().upload_timestamp))
-            }
-        }
+            })
+            .or_else(|| {
+                if version.upload_timestamp > 0 {
+                    Some(UNIX_EPOCH + Duration::from_millis(version.upload_timestamp))
+                } else {
+                    None
+                }
+            })
     }
 }
 
@@ -429,7 +434,8 @@ impl B2Client {
 
         let request = builder.body(Body::wrap_stream(stream))?;
 
-        self.basic_request("b2_upload_file", path, request).await
+        let result = self.basic_request("b2_upload_file", path, request).await?;
+        Ok(result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -452,7 +458,8 @@ impl B2Client {
             .header("X-Bz-Content-Sha1", hash)
             .body(Body::wrap_stream(stream))?;
 
-        self.basic_request("b2_upload_part", path, request).await
+        let result = self.basic_request("b2_upload_part", path, request).await?;
+        Ok(result)
     }
 
     b2_api!(b2_list_buckets, ListBucketsRequest, ListBucketsResponse);

@@ -2,7 +2,7 @@ trigger:
   - master
 
 variables:
-  default_toolchain: nightly
+  default_toolchain: nightly-2019-09-01
   default_vm: macos-10.13
 
 jobs:
@@ -95,13 +95,13 @@ jobs:
       matrix:
         linux-nightly:
           platform: "ubuntu-16.04"
-          toolchain: "nightly"
+          toolchain: $(default_toolchain)
         mac-nightly:
           platform: "macos-10.13"
-          toolchain: "nightly"
+          toolchain: $(default_toolchain)
         windows-nightly:
           platform: "vs2017-win2016"
-          toolchain: "nightly"
+          toolchain: $(default_toolchain)
     pool:
       vmImage: $(platform)
     steps:

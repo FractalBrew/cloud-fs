@@ -50,7 +50,7 @@ pub mod v2 {
         utf8_percent_encode(value, &ENCODE_SET).collect()
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum FileAction {
         Start,
         Upload,

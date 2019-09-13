@@ -158,8 +158,6 @@ where
 #[derive(Clone, Debug)]
 pub struct FileObject {
     path: ObjectPath,
-    len: u64,
-    object_type: ObjectType,
     metadata: Option<Metadata>,
 }
 
@@ -169,38 +167,39 @@ impl ObjectInfo for FileObject {
     }
 
     fn len(&self) -> u64 {
-        self.len
+        if let Some(ref m) = self.metadata {
+            if m.is_file() {
+                return m.len();
+            }
+        }
+
+        0
     }
 
     fn object_type(&self) -> ObjectType {
-        self.object_type
+        match self.metadata {
+            Some(ref m) => {
+                if m.is_file() {
+                    ObjectType::File
+                } else if m.is_dir() {
+                    ObjectType::Directory
+                } else {
+                    ObjectType::Symlink
+                }
+            }
+            None => ObjectType::Unknown,
+        }
     }
 
     fn modified(&self) -> Option<SystemTime> {
-        self.metadata.as_ref().and_then(|m| m.modified().ok())
+        self.metadata
+            .as_ref()
+            .and_then(|m| if m.is_file() { m.modified().ok() } else { None })
     }
 }
 
 fn get_object(path: ObjectPath, metadata: Option<Metadata>) -> Object {
-    let (object_type, len) = match metadata {
-        Some(ref m) => {
-            if m.is_file() {
-                (ObjectType::File, m.len())
-            } else if m.is_dir() {
-                (ObjectType::Directory, 0)
-            } else {
-                (ObjectType::Symlink, 0)
-            }
-        }
-        None => (ObjectType::Unknown, 0),
-    };
-
-    Object::from(FileObject {
-        path,
-        len,
-        object_type,
-        metadata,
-    })
+    Object::from(FileObject { path, metadata })
 }
 
 #[derive(Clone, Debug)]

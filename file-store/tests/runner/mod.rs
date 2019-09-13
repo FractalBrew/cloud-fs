@@ -120,6 +120,7 @@ where
 }
 
 pub struct TestContext {
+    // Needed to keep the temp dir alive until the context is dropped.
     _temp: TempDir,
     root: PathBuf,
     fs_root: String,

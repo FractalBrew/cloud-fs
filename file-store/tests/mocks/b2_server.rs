@@ -1147,7 +1147,8 @@ impl B2Server {
                 }
             }
 
-            self.b2_upload_file(&bucket_id, head, body).await
+            let result = self.b2_upload_file(&bucket_id, head, body).await?;
+            Ok(result)
         } else if path.starts_with("/upload/part/") {
             if head.method != "POST" {
                 return Err(B2Error::method_not_allowed(
