@@ -46,28 +46,6 @@ jobs:
     - name: Check docs
       run: cargo doc --no-deps && cargo deadlinks --dir target/doc/file_store
 
-  coverage:
-    name: Measure code coverage
-    runs-on: ubuntu-18.04
-
-    steps:
-    - name: Setup rust
-      uses: hecrj/setup-rust-action@v1.1.0
-      with:
-        rust-version: nightly-2019-09-01
-    - name: Install tarpaulin
-      run: cargo install cargo-tarpaulin
-    - uses: actions/checkout@v1
-    - name: Set branch name
-      run: git checkout -b master
-    - name: Run tarpaulin
-      run: cargo tarpaulin --release --ciserver azure --coveralls $COVERALLS_TOKEN --ignore-tests
-      env:
-        CI_NAME: github
-        CI_BUILD_URL: https://github.com/FractalBrew/file-store-rs/commit/${{ github.sha }}/checks
-        CI_BRANCH: master
-        COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
-
   test:
     strategy:
       matrix:
