@@ -21,7 +21,7 @@ jobs:
     - name: Set branch name
       run: git checkout -b master
     - name: Run tarpaulin
-      run: cargo tarpaulin --release --ciserver azure --coveralls $COVERALLS_TOKEN --ignore-tests
+      run: cargo tarpaulin --release --ciserver github --timeout 300 --coveralls $COVERALLS_TOKEN --ignore-tests
       env:
         CI_NAME: github
         CI_BUILD_NUMBER: ${{ github.sha }}
