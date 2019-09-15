@@ -46,7 +46,6 @@ const TEST_KEY: &str = "bar";
 const TEST_ACCOUNT_ID: &str = "foobarbaz";
 
 /// How many uses can an auth token see before it expires?
-const AUTH_TIMEOUT: usize = 10000;
 const DEFAULT_FILE_COUNT: usize = 2;
 const BUCKET_ID_PREFIX: &str = "bkt_";
 const FILE_ID_PREFIX: &str = "id_";
@@ -443,6 +442,7 @@ impl B2ServerState {
 struct B2Server {
     addr: SocketAddr,
     root: PathBuf,
+    auth_timeout: usize,
     state: Arc<Mutex<B2ServerState>>,
 }
 
@@ -1067,7 +1067,7 @@ impl B2Server {
             }
         };
 
-        if count < AUTH_TIMEOUT {
+        if count < self.auth_timeout {
             state.authorizations.insert(auth.to_owned(), count + 1);
             Ok(())
         } else {
@@ -1226,7 +1226,7 @@ impl B2Server {
     }
 }
 
-pub fn start_server(root: PathBuf) -> TestResult<(SocketAddr, Sender<()>)> {
+pub fn start_server(root: PathBuf, auth_timeout: usize) -> TestResult<(SocketAddr, Sender<()>)> {
     let (shutdown_sender, shutdown_receiver) = channel::<()>();
 
     let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
@@ -1237,6 +1237,7 @@ pub fn start_server(root: PathBuf) -> TestResult<(SocketAddr, Sender<()>)> {
 
     let b2_server = B2Server {
         addr,
+        auth_timeout,
         state: Arc::new(Mutex::new(B2ServerState::new())),
         root,
     };
