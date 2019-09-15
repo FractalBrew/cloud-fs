@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use base64::encode;
 use futures::lock::Mutex;
-use futures::stream::Stream;
+use futures::stream::{iter, Stream, StreamExt};
 use http::header;
 use http::method::Method;
 use hyper::body::Body;
@@ -28,7 +28,7 @@ use storage_types::b2::v2::{
 };
 
 use super::{B2Settings, Client};
-use crate::types::stream::{AfterStream, VecStream};
+use crate::types::stream::AfterStream;
 use crate::types::*;
 use crate::utils::Limit;
 
@@ -349,26 +349,45 @@ impl B2Client {
         info: UserFileInfo,
         length: u64,
         hash: String,
-        stream: VecStream<StorageResult<Data>>,
+        data: Vec<Data>,
     ) -> StorageResult<UploadFileResponse> {
-        let mut builder = Request::builder();
-        builder
-            .method(Method::POST)
-            .uri(url)
-            .header(header::AUTHORIZATION, auth)
-            .header(B2_HEADER_FILE_NAME, percent_encode(&file_name))
-            .header(header::CONTENT_TYPE, content_type)
-            .header(header::CONTENT_LENGTH, length)
-            .header(B2_HEADER_CONTENT_SHA1, hash);
+        let mut tries: usize = 0;
 
-        for (key, value) in info {
-            builder.header(&format!("{}{}", B2_HEADER_FILE_INFO_PREFIX, key), value);
+        loop {
+            let mut builder = Request::builder();
+            builder
+                .method(Method::POST)
+                .uri(&url)
+                .header(header::AUTHORIZATION, &auth)
+                .header(B2_HEADER_FILE_NAME, percent_encode(&file_name))
+                .header(header::CONTENT_TYPE, &content_type)
+                .header(header::CONTENT_LENGTH, length)
+                .header(B2_HEADER_CONTENT_SHA1, &hash);
+
+            for (key, value) in info.iter() {
+                builder.header(&format!("{}{}", B2_HEADER_FILE_INFO_PREFIX, key), value);
+            }
+
+            let request = builder.body(Body::wrap_stream(
+                iter(data.clone()).map(Ok::<_, StorageError>),
+            ))?;
+
+            let _limit = self.limiter.take().await;
+            match self
+                .basic_request("b2_upload_file", path.clone(), request)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    tries += 1;
+                    if tries < MAX_API_RETRIES {
+                        continue;
+                    }
+
+                    return Err(e);
+                }
+            }
         }
-
-        let request = builder.body(Body::wrap_stream(stream))?;
-
-        let _limit = self.limiter.take().await;
-        self.basic_request("b2_upload_file", path, request).await
     }
 
     pub async fn b2_upload_part(
@@ -378,19 +397,38 @@ impl B2Client {
         part: usize,
         length: u64,
         hash: String,
-        stream: VecStream<StorageResult<Data>>,
+        data: Vec<Data>,
     ) -> StorageResult<UploadPartResponse> {
-        let request = Request::builder()
-            .method(Method::POST)
-            .uri(upload_url.upload_url)
-            .header(header::AUTHORIZATION, upload_url.authorization_token)
-            .header(B2_HEADER_PART_NUMBER, part)
-            .header(header::CONTENT_LENGTH, length)
-            .header(B2_HEADER_CONTENT_SHA1, hash)
-            .body(Body::wrap_stream(stream))?;
+        let mut tries: usize = 0;
 
-        let _limit = self.limiter.take().await;
-        self.basic_request("b2_upload_part", path, request).await
+        loop {
+            let request = Request::builder()
+                .method(Method::POST)
+                .uri(&upload_url.upload_url)
+                .header(header::AUTHORIZATION, &upload_url.authorization_token)
+                .header(B2_HEADER_PART_NUMBER, part)
+                .header(header::CONTENT_LENGTH, length)
+                .header(B2_HEADER_CONTENT_SHA1, &hash)
+                .body(Body::wrap_stream(
+                    iter(data.clone()).map(Ok::<_, StorageError>),
+                ))?;
+
+            let _limit = self.limiter.take().await;
+            match self
+                .basic_request("b2_upload_part", path.clone(), request)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    tries += 1;
+                    if tries < MAX_API_RETRIES {
+                        continue;
+                    }
+
+                    return Err(e);
+                }
+            }
+        }
     }
 
     b2_api!(b2_list_buckets, ListBucketsRequest, ListBucketsResponse);

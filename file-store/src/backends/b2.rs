@@ -57,7 +57,7 @@ use storage_types::b2::v2::responses::*;
 use storage_types::b2::v2::{FileAction, UserFileInfo, LAST_MODIFIED_KEY};
 
 use super::Backend;
-use crate::types::stream::{MergedStreams, ResultStreamPoll, VecStream};
+use crate::types::stream::{MergedStreams, ResultStreamPoll};
 use crate::types::*;
 use crate::utils::{into_data_stream, Limit};
 use crate::{FileStore, StorageBackend};
@@ -211,7 +211,7 @@ async fn part_upload(
     path: ObjectPath,
     file_id: String,
     part: usize,
-    mut part_data: PartData,
+    part_data: PartData,
     mut sender: Sender<Result<(), (usize, StorageError)>>,
 ) {
     trace!(
@@ -238,7 +238,7 @@ async fn part_upload(
             part,
             part_data.length,
             part_data.hash,
-            VecStream::from(part_data.data.drain(..).map(Ok).collect()),
+            part_data.data,
         )
         .await
     {
@@ -417,7 +417,7 @@ async fn small_upload(
     info: UploadInfo,
     bucket_id: String,
     file_name: String,
-    mut part_data: PartData,
+    part_data: PartData,
 ) -> StorageResult<()> {
     trace!(
         "Starting regular file upload to {} with {} bytes in {} chunks.",
@@ -450,7 +450,7 @@ async fn small_upload(
             user_info,
             part_data.length,
             part_data.hash,
-            VecStream::from(part_data.data.drain(..).map(Ok).collect()),
+            part_data.data,
         )
         .await?;
 
