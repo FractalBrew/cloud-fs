@@ -21,8 +21,9 @@ jobs:
     - name: Set branch name
       run: git checkout -b ${{ github.ref }}
     - name: Run tarpaulin
-      run: end && cargo tarpaulin --release --timeout 300  --out Xml --ignore-tests && bash <(curl -s https://codecov.io/bash)
+      run: cargo tarpaulin --release --timeout 300  --out Xml --ignore-tests
+    - name: Upload results
+      run: bash <(curl -s https://codecov.io/bash)
       env:
         CI_BUILD_URL: https://github.com/FractalBrew/file-store-rs/commit/${{ github.sha }}/checks
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
