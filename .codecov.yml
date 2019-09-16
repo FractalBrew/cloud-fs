@@ -1,0 +1,3 @@
+ignore:
+  - "cli"
+  - "file-store/tests"
