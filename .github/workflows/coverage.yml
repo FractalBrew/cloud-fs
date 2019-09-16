@@ -21,11 +21,9 @@ jobs:
     - name: Set branch name
       run: git checkout -b master
     - name: Run tarpaulin
-      run: cargo tarpaulin --release --ciserver github --timeout 300 --coveralls $COVERALLS_TOKEN --ignore-tests
+      run: env && cargo tarpaulin --debug --release --ciserver github --timeout 300 --coveralls $COVERALLS_TOKEN --ignore-tests
       env:
         CI_NAME: github
-        CI_BUILD_NUMBER: ${{ github.sha }}
-        CI_JOB_ID: ${{ github.sha }}
         CI_BUILD_URL: https://github.com/FractalBrew/file-store-rs/commit/${{ github.sha }}/checks
         CI_BRANCH: master
         COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
