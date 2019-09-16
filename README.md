@@ -1,7 +1,7 @@
 # file-store
 
 [![Build status](https://github.com/FractalBrew/file-store-rs/workflows/Checks/badge.svg)](https://github.com/FractalBrew/file-store-rs/actions)
-[![Code coverage](https://img.shields.io/coveralls/github/FractalBrew/file-store-rs)](https://coveralls.io/github/FractalBrew/file-store-rs?branch=master)
+[![Code coverage](https://codecov.io/gh/FractalBrew/file-store-rs/branch/master/graph/badge.svg)](https://codecov.io/gh/FractalBrew/file-store-rs)
 [![Open issues](https://img.shields.io/github/issues-raw/FractalBrew/file-store-rs)](https://github.com/FractalBrew/file-store-rs/issues)
 ![Code status](https://img.shields.io/badge/status-pre--alpha-red)
 

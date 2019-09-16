@@ -23,7 +23,7 @@ jobs:
     - name: Run tarpaulin
       run: cargo tarpaulin --release --timeout 300  --out Xml --ignore-tests
     - name: Upload results
-      run: bash <(curl -s https://codecov.io/bash)
+      run: bash <(curl -s https://codecov.io/bash) -f cobertura.xml -y .codecov.yml
       env:
         CI_BUILD_URL: https://github.com/FractalBrew/file-store-rs/commit/${{ github.sha }}/checks
         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
