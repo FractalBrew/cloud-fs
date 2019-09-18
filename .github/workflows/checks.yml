@@ -3,10 +3,26 @@ name: Checks
 on: [push]
 
 jobs:
+  licenses:
+    name: Check dependency licenses.
+    runs-on: ubuntu-18.04
+
+    steps:
+    - name: Setup rust
+      uses: hecrj/setup-rust-action@v1.1.0
+      with:
+        rust-version: nightly-2019-09-01
+        components: clippy
+    - name: Install cargo-deny
+      run: cargo install cargo-deny
+    - uses: actions/checkout@v1
+    - name: Check licenses
+      run: cargo deny check
+
   lint:
     name: Lint code
     runs-on: ubuntu-18.04
-    
+
     steps:
     - name: Setup rust
       uses: hecrj/setup-rust-action@v1.1.0

@@ -3,6 +3,7 @@ name = "fs"
 version = "0.1.0"
 authors = ["Dave Townsend <dtownsend@oxymoronical.com>"]
 edition = "2018"
+license = "Apache-2.0"
 
 [dependencies]
 file-store = { path = "../file-store" }

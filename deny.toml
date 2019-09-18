@@ -1,0 +1,44 @@
+[licenses]
+# If a crate doesn't have a license, error
+unlicensed = "deny"
+# If a crate has a LICENSE* file, but it can't be determined, error
+unknown = "deny"
+# We want really high confidence when inferring licenses from text
+confidence_threshold = 0.92
+
+# The only licenses we allow. These must be valid SPDX identifiers, at least syntactically,
+# but nothing stops you from using your own license identifier for your private crates
+allow = [
+    # Code that links to Apache-2.0 licensed works are not considered to be
+    # derivative works and so nothing needs to be done.
+    "Apache-2.0",
+    "LLVM-exception",
+    # Looks like linking to an MIT licensed work is fine.
+    "MIT",
+    # Redistributing in source or binary form requires including the copyright
+    # notice. Not sure if that applies to linking but since we only distribute
+    # source and that source doesn't include the licensed source this seems fine.
+    "BSD-2-Clause",
+    "BSD-2-Clause-FreeBSD",
+    "BSD-3-Clause",
+    # Completely free of restrictions it seems.
+    "Unlicense",
+    # Looks like doesn't restrict links.
+    "ISC",
+    # Doesn't restrict linking.
+    "BSL-1.0"
+]
+
+[[licenses.ignore]]
+name = "crossbeam-channel"
+license_files = [
+    # A mixture of Apache-2.0, MIT and BSD-2
+    { path = "LICENSE-THIRD-PARTY", hash = 0xc6242648 },
+]
+
+[[licenses.ignore]]
+name = "tokio-macros"
+license_files = [
+    # MIT
+    { path = "LICENSE", hash = 0xff97fcac },
+]
