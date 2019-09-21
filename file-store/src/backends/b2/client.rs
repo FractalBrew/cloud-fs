@@ -19,6 +19,7 @@
 use std::fmt;
 use std::future::Future;
 use std::io::Read;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -44,7 +45,7 @@ use storage_types::b2::v2::{
 use super::{B2Settings, Client};
 use crate::types::stream::AfterStream;
 use crate::types::*;
-use crate::utils::Limit;
+use crate::utils::{InUse, Limited};
 
 const MAX_API_RETRIES: usize = 5;
 
@@ -118,30 +119,25 @@ macro_rules! b2_api {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub(super) struct B2ClientState {
-    session: Option<AuthorizeAccountResponse>,
+    pub settings: B2Settings,
+    pub next_id: Arc<AtomicUsize>,
+    pub clients: Limited<Client>,
+    pub session: Mutex<Option<AuthorizeAccountResponse>>,
 }
 
 #[derive(Debug)]
 pub(super) struct B2Client {
     pub id: usize,
-    pub client: Client,
-    pub settings: B2Settings,
-    pub next_id: Arc<AtomicUsize>,
-    pub state: Arc<Mutex<B2ClientState>>,
-    pub limiter: Limit,
+    pub state: Arc<B2ClientState>,
 }
 
 impl Clone for B2Client {
     fn clone(&self) -> B2Client {
         B2Client {
-            id: self.next_id.fetch_add(1, Ordering::SeqCst),
-            client: self.client.clone(),
-            settings: self.settings.clone(),
-            next_id: self.next_id.clone(),
+            id: self.state.next_id.fetch_add(1, Ordering::SeqCst),
             state: self.state.clone(),
-            limiter: self.limiter.clone(),
         }
     }
 }
@@ -152,22 +148,22 @@ impl B2Client {
     }
 
     async fn request(
-        &self,
+        self,
         method: &str,
         path: ObjectPath,
+        client: &InUse<Client>,
         request: Request<Body>,
     ) -> StorageResult<Response<Body>> {
-        trace!("Client {:04}: Requesting {}", self.id, request.uri());
-        let response = match self.client.request(request).await {
+        let id = self.id;
+
+        trace!("Client {:04}: Requesting {}", id, request.uri());
+        let response = match client.request(request).await {
             Ok(r) => {
-                trace!("Client {:04}: {} b2 api call succeeded", self.id, method);
+                trace!("Client {:04}: {} b2 api call succeeded", id, method);
                 r
             }
             Err(e) => {
-                error!(
-                    "Client {:04}: {} b2 api call failed: {}",
-                    self.id, method, e
-                );
+                error!("Client {:04}: {} b2 api call failed: {}", id, method, e);
                 return Err(e.into());
             }
         };
@@ -181,20 +177,23 @@ impl B2Client {
             BlockingStreamReader::from_stream(body)
                 .read_to_string(&mut data)
                 .unwrap();
-            Err(generate_error(method, self.id, &path, &data))
+            Err(generate_error(method, id, &path, &data))
         }
     }
 
     async fn basic_request<R>(
-        &self,
+        self,
         method: &str,
         path: ObjectPath,
+        mut client: InUse<Client>,
         request: Request<Body>,
     ) -> StorageResult<R>
     where
         R: DeserializeOwned + fmt::Debug,
     {
-        let response = self.request(method, path, request).await?;
+        let id = self.id;
+
+        let response = self.request(method, path, &client, request).await?;
         let (_, body) = response.into_parts();
 
         let mut data: String = String::new();
@@ -202,18 +201,16 @@ impl B2Client {
             .read_to_string(&mut data)
             .unwrap();
 
+        // Make sure that client stays alive until the request is complete.
+        client.release();
+
         match from_str(&data) {
             Ok(r) => {
-                trace!(
-                    "Client {:04}: {} api method returned {:?}",
-                    self.id,
-                    method,
-                    r
-                );
+                trace!("Client {:04}: {} api method returned {:?}", id, method, r);
                 Ok(r)
             }
             Err(e) => {
-                error!("Client {:04}: {} api method failed: {}", self.id, method, e);
+                error!("Client {:04}: {} api method failed: {}", id, method, e);
                 Err(error::invalid_data(
                     &format!("Unable to parse response from {}.", method),
                     Some(e),
@@ -222,10 +219,13 @@ impl B2Client {
         }
     }
 
-    async fn b2_authorize_account(&self) -> StorageResult<AuthorizeAccountResponse> {
+    async fn b2_authorize_account(self) -> StorageResult<AuthorizeAccountResponse> {
         let secret = format!(
             "Basic {}",
-            encode(&format!("{}:{}", self.settings.key_id, self.settings.key))
+            encode(&format!(
+                "{}:{}",
+                self.state.settings.key_id, self.state.settings.key
+            ))
         );
 
         trace!(
@@ -236,12 +236,14 @@ impl B2Client {
 
         let request = Request::builder()
             .method(Method::GET)
-            .uri(self.api_url(&self.settings.host, "b2_authorize_account"))
+            .uri(self.api_url(&self.state.settings.host, "b2_authorize_account"))
             .header(header::AUTHORIZATION, secret)
+            .header(header::USER_AGENT, &self.state.settings.user_agent)
             .body(Body::empty())?;
 
+        let client = self.state.clients.take().await;
         let empty = ObjectPath::empty();
-        self.basic_request("b2_authorize_account", empty, request)
+        self.basic_request("b2_authorize_account", empty, client, request)
             .await
     }
 
@@ -252,8 +254,6 @@ impl B2Client {
     {
         let mut tries: usize = 0;
         loop {
-            let _limit = self.limiter.take().await;
-
             let (api_url, authorization) = {
                 let session = self.session().await?;
                 (session.api_url.clone(), session.authorization_token.clone())
@@ -272,9 +272,16 @@ impl B2Client {
                 .method(Method::POST)
                 .uri(self.api_url(&api_url, method))
                 .header(header::AUTHORIZATION, &authorization)
+                .header(header::USER_AGENT, &self.state.settings.user_agent)
                 .body(data.into())?;
 
-            match self.basic_request(method, path.clone(), request).await {
+            let client = self.state.clients.take().await;
+
+            match self
+                .clone()
+                .basic_request(method, path.clone(), client, request)
+                .await
+            {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     if e.kind() == error::StorageErrorKind::AccessExpired {
@@ -291,6 +298,30 @@ impl B2Client {
         }
     }
 
+    async fn reset_session(&self, auth_token: &str) {
+        let mut session = self.state.session.lock().await;
+        if let Some(ref s) = session.deref() {
+            if s.authorization_token == auth_token {
+                session.take();
+            }
+        }
+    }
+
+    async fn session(&self) -> StorageResult<AuthorizeAccountResponse> {
+        let mut session = self.state.session.lock().await;
+        if let Some(ref s) = session.deref() {
+            Ok(s.clone())
+        } else {
+            let new_session = self.clone().b2_authorize_account().await?;
+            session.replace(new_session.clone());
+            Ok(new_session)
+        }
+    }
+
+    pub async fn account_info(&self) -> StorageResult<AuthorizeAccountResponse> {
+        self.session().await
+    }
+
     pub async fn b2_download_file_by_name(
         self,
         path: ObjectPath,
@@ -299,8 +330,6 @@ impl B2Client {
     ) -> StorageResult<impl Stream<Item = Result<Chunk, hyper::Error>>> {
         let mut tries: usize = 0;
         loop {
-            let mut limit = self.limiter.take().await;
-
             let (download_url, authorization) = {
                 let session = self.session().await?;
                 (
@@ -318,22 +347,25 @@ impl B2Client {
 
             let request = Request::builder()
                 .method(Method::GET)
+                .header(header::AUTHORIZATION, &authorization)
+                .header(header::USER_AGENT, &self.state.settings.user_agent)
                 .uri(format!(
                     "{}/file/{}/{}",
                     download_url,
                     percent_encode(&bucket),
                     percent_encode(&file)
                 ))
-                .header(header::AUTHORIZATION, &authorization)
                 .body(Body::empty())?;
 
+            let mut client = self.state.clients.take().await;
             match self
-                .request("b2_download_file_by_name", path.clone(), request)
+                .clone()
+                .request("b2_download_file_by_name", path.clone(), &client, request)
                 .await
             {
                 Ok(response) => {
                     let (_, body) = response.into_parts();
-                    let stream = AfterStream::after(body, move || limit.release());
+                    let stream = AfterStream::after(body, move || client.release());
 
                     return Ok(stream);
                 }
@@ -373,6 +405,7 @@ impl B2Client {
                 .method(Method::POST)
                 .uri(&url)
                 .header(header::AUTHORIZATION, &auth)
+                .header(header::USER_AGENT, &self.state.settings.user_agent)
                 .header(B2_HEADER_FILE_NAME, percent_encode(&file_name))
                 .header(header::CONTENT_TYPE, &content_type)
                 .header(header::CONTENT_LENGTH, length)
@@ -386,9 +419,10 @@ impl B2Client {
                 iter(data.clone()).map(Ok::<_, StorageError>),
             ))?;
 
-            let _limit = self.limiter.take().await;
+            let client = self.state.clients.take().await;
             match self
-                .basic_request("b2_upload_file", path.clone(), request)
+                .clone()
+                .basic_request("b2_upload_file", path.clone(), client, request)
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -420,6 +454,7 @@ impl B2Client {
                 .method(Method::POST)
                 .uri(&upload_url.upload_url)
                 .header(header::AUTHORIZATION, &upload_url.authorization_token)
+                .header(header::USER_AGENT, &self.state.settings.user_agent)
                 .header(B2_HEADER_PART_NUMBER, part)
                 .header(header::CONTENT_LENGTH, length)
                 .header(B2_HEADER_CONTENT_SHA1, &hash)
@@ -427,9 +462,10 @@ impl B2Client {
                     iter(data.clone()).map(Ok::<_, StorageError>),
                 ))?;
 
-            let _limit = self.limiter.take().await;
+            let client = self.state.clients.take().await;
             match self
-                .basic_request("b2_upload_part", path.clone(), request)
+                .clone()
+                .basic_request("b2_upload_part", path.clone(), client, request)
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -478,29 +514,4 @@ impl B2Client {
         FinishLargeFileRequest,
         FinishLargeFileResponse
     );
-
-    async fn reset_session(&self, auth_token: &str) {
-        let mut state = self.state.lock().await;
-        if let Some(ref s) = state.session {
-            if s.authorization_token == auth_token {
-                state.session.take();
-            }
-        }
-    }
-
-    async fn session(&self) -> StorageResult<AuthorizeAccountResponse> {
-        let mut state = self.state.lock().await;
-        if let Some(ref s) = state.session {
-            Ok(s.clone())
-        } else {
-            let new_session = self.b2_authorize_account().await?;
-            state.session.replace(new_session.clone());
-            Ok(new_session)
-        }
-    }
-
-    pub async fn account_info(&self) -> StorageResult<AuthorizeAccountResponse> {
-        let _limit = self.limiter.take().await;
-        self.session().await
-    }
 }

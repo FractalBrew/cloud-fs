@@ -48,7 +48,7 @@ use std::convert::TryInto;
 use std::future::Future;
 use std::pin::Pin;
 use std::slice::Iter;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -56,7 +56,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bytes::IntoBuf;
 use futures::channel::mpsc::{channel, Sender};
 use futures::future::{ready, TryFutureExt};
-use futures::lock::Mutex;
 use futures::sink::SinkExt;
 use futures::stream::{Stream, StreamExt, TryStreamExt};
 use hyper::client::connect::HttpConnector;
@@ -73,7 +72,7 @@ use storage_types::b2::v2::{FileAction, UserFileInfo, LAST_MODIFIED_KEY};
 use super::Backend;
 use crate::types::stream::{MergedStreams, ResultStreamPoll};
 use crate::types::*;
-use crate::utils::{into_data_stream, Limit};
+use crate::utils::{into_data_stream, Limited};
 use crate::{FileStore, StorageBackend};
 use client::{B2Client, B2ClientState};
 
@@ -212,6 +211,7 @@ struct B2Settings {
     host: String,
     prefix: ObjectPath,
     max_small_file_size: u64,
+    user_agent: String,
 }
 
 struct PartData {
@@ -719,11 +719,7 @@ where
 /// The backend implementation for B2 storage.
 #[derive(Debug, Clone)]
 pub struct B2Backend {
-    settings: B2Settings,
-    client: Client,
-    next_id: Arc<AtomicUsize>,
-    state: Arc<Mutex<B2ClientState>>,
-    limiter: Limit,
+    state: Arc<B2ClientState>,
 }
 
 impl B2Backend {
@@ -745,6 +741,12 @@ impl B2Backend {
                 host: B2_API_HOST.to_owned(),
                 prefix: ObjectPath::empty(),
                 max_small_file_size: DEFAULT_MAX_SMALL_FILE_SIZE,
+                user_agent: format!(
+                    "{}/{} ({})",
+                    env!("CARGO_PKG_NAME"),
+                    env!("CARGO_PKG_VERSION"),
+                    env!("CARGO_PKG_REPOSITORY")
+                ),
             },
             max_requests: DEFAULT_REQUEST_LIMIT,
         }
@@ -754,12 +756,8 @@ impl B2Backend {
     /// making B2 API calls.
     fn client(&self) -> B2Client {
         B2Client {
-            id: self.next_id.fetch_add(1, Ordering::SeqCst),
-            settings: self.settings.clone(),
-            client: self.client.clone(),
-            next_id: self.next_id.clone(),
+            id: self.state.next_id.fetch_add(1, Ordering::SeqCst),
             state: self.state.clone(),
-            limiter: self.limiter.clone(),
         }
     }
 
@@ -852,6 +850,12 @@ impl B2BackendBuilder {
         self
     }
 
+    /// Sets the User-Agent for all requests to B2.
+    pub fn user_agent(mut self, user_agent: &str) -> B2BackendBuilder {
+        self.settings.user_agent = user_agent.to_owned();
+        self
+    }
+
     /// Creates a new B2 based [`FileStore`](../../enum.FileStore.html) using
     /// this builder's settings.
     pub fn connect(self) -> ConnectFuture {
@@ -870,11 +874,12 @@ impl B2BackendBuilder {
             let client = HyperClient::builder().build(connector);
 
             let backend = B2Backend {
-                settings: self.settings,
-                client,
-                next_id: Default::default(),
-                state: Arc::new(Mutex::new(Default::default())),
-                limiter: Limit::new(self.max_requests),
+                state: Arc::new(B2ClientState {
+                    settings: self.settings,
+                    next_id: Default::default(),
+                    clients: Limited::new(client, self.max_requests),
+                    session: Default::default(),
+                }),
             };
 
             // Make sure we can connect.
@@ -955,7 +960,7 @@ impl StorageBackend for B2Backend {
 
         ObjectStreamFuture::from_future(object_list(
             self.client(),
-            self.settings.prefix.clone(),
+            self.state.settings.prefix.clone(),
             prefix,
             None,
         ))
@@ -977,7 +982,7 @@ impl StorageBackend for B2Backend {
 
         ObjectStreamFuture::from_future(object_list(
             self.client(),
-            self.settings.prefix.clone(),
+            self.state.settings.prefix.clone(),
             path,
             Some(String::from("/")),
         ))
@@ -1031,7 +1036,7 @@ impl StorageBackend for B2Backend {
         }
 
         let client = self.client();
-        let prefix = self.settings.prefix.clone();
+        let prefix = self.state.settings.prefix.clone();
         ObjectFuture::from_future(get(client, prefix, path))
     }
 
@@ -1052,7 +1057,7 @@ impl StorageBackend for B2Backend {
             )));
         }
 
-        let mut file_name = self.settings.prefix.join(&path);
+        let mut file_name = self.state.settings.prefix.join(&path);
         let bucket = match file_name.unshift_part() {
             Some(b) => b,
             _ => {
@@ -1179,8 +1184,8 @@ impl StorageBackend for B2Backend {
 
         WriteCompleteFuture::from_future(upload(
             self.client(),
-            self.settings.max_small_file_size,
-            self.settings.prefix.clone(),
+            self.state.settings.max_small_file_size,
+            self.state.settings.prefix.clone(),
             info,
             into_data_stream(stream),
         ))

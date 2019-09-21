@@ -1116,6 +1116,33 @@ impl B2Server {
             }
         };
 
+        match head.headers.get(header::USER_AGENT) {
+            Some(ua) => {
+                let ua = ua.to_str().map_err(|e| {
+                    B2Error::new(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        format!("User-Agent was invalid: {}", e),
+                    )
+                })?;
+
+                if &ua[0..10] != env!("CARGO_PKG_NAME") {
+                    return Err(B2Error::new(
+                        StatusCode::UNAUTHORIZED,
+                        "unauthorized",
+                        format!("User-Agent was invalid: {}", ua),
+                    ));
+                }
+            }
+            None => {
+                return Err(B2Error::new(
+                    StatusCode::UNAUTHORIZED,
+                    "unauthorized",
+                    "User-Agent was not sent",
+                ));
+            }
+        }
+
         let auth = match head.headers.get(header::AUTHORIZATION) {
             Some(a) => a
                 .to_str()

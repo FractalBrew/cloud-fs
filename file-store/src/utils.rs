@@ -16,6 +16,7 @@
 //! types that this crate uses.
 use std::future::Future;
 use std::io;
+use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -120,39 +121,50 @@ where
 }
 
 #[derive(Debug, Default)]
-struct LimitState {
+struct LimitState<T> {
+    base: T,
     available: usize,
     wakers: Vec<Waker>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Limit {
-    state: Arc<Mutex<LimitState>>,
+pub(crate) struct Limited<T>
+where
+    T: Clone,
+{
+    // Using an asynchronous lock is pretty painful. But the lock is not held
+    // long so this shouldn't block up the tasks much.
+    state: Arc<Mutex<LimitState<T>>>,
 }
 
-impl Limit {
-    pub fn new(count: usize) -> Limit {
-        Limit {
+impl<T> Limited<T>
+where
+    T: Clone,
+{
+    pub fn new(base: T, count: usize) -> Limited<T> {
+        Limited {
             state: Arc::new(Mutex::new(LimitState {
+                base,
                 available: count,
                 wakers: Default::default(),
             })),
         }
     }
 
-    pub fn take(&self) -> LimitFuture {
+    pub fn take(&self) -> LimitFuture<T> {
         LimitFuture {
             state: self.state.clone(),
         }
     }
 }
 
-pub(crate) struct InUse {
-    state: Arc<Mutex<LimitState>>,
+pub(crate) struct InUse<T> {
+    state: Arc<Mutex<LimitState<T>>>,
     released: bool,
+    inner: T,
 }
 
-impl InUse {
+impl<T> InUse<T> {
     pub fn release(&mut self) {
         let mut state = self.state.lock().unwrap();
         state.available += 1;
@@ -165,7 +177,21 @@ impl InUse {
     }
 }
 
-impl Drop for InUse {
+impl<T> Deref for InUse<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.inner
+    }
+}
+
+impl<T> DerefMut for InUse<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+}
+
+impl<T> Drop for InUse<T> {
     fn drop(&mut self) {
         if !self.released {
             self.release();
@@ -173,18 +199,22 @@ impl Drop for InUse {
     }
 }
 
-pub(crate) struct LimitFuture {
-    state: Arc<Mutex<LimitState>>,
+pub(crate) struct LimitFuture<T> {
+    state: Arc<Mutex<LimitState<T>>>,
 }
 
-impl Future for LimitFuture {
-    type Output = InUse;
+impl<T> Future for LimitFuture<T>
+where
+    T: Clone,
+{
+    type Output = InUse<T>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<InUse> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<InUse<T>> {
         let mut state = self.state.lock().unwrap();
         if state.available > 0 {
             state.available -= 1;
             Poll::Ready(InUse {
+                inner: state.base.clone(),
                 state: self.state.clone(),
                 released: false,
             })
