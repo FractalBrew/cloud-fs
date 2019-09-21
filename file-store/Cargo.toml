@@ -15,6 +15,7 @@ enum_dispatch = { git = "https://github.com/Mossop/enum_dispatch.git", rev="806c
 futures-preview = "=0.3.0-alpha.18"
 bytes = "^0.4.12"
 log = "^0.4.8"
+tokio-sync = "=0.2.0-alpha.4"
 storage-types = { path = "../storage-types", optional = true }
 tokio-fs = { version = "=0.2.0-alpha.4", optional = true }
 tokio-io = { version = "=0.2.0-alpha.4", optional = true }

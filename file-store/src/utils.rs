@@ -14,17 +14,18 @@
 
 //! A set of useful utilities for converting between the different asynchronous
 //! types that this crate uses.
-use std::future::Future;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
 use bytes::buf::FromBuf;
 use bytes::{BytesMut, IntoBuf};
+use futures::future::poll_fn;
 use futures::stream::{Stream, StreamExt};
 use tokio_io::{AsyncRead, BufReader};
+use tokio_sync::semaphore::{Permit, Semaphore};
 
 use crate::types::{Data, StorageError};
 
@@ -120,21 +121,13 @@ where
     })
 }
 
-#[derive(Debug, Default)]
-struct LimitState<T> {
-    base: T,
-    available: usize,
-    wakers: Vec<Waker>,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct Limited<T>
 where
     T: Clone,
 {
-    // Using an asynchronous lock is pretty painful. But the lock is not held
-    // long so this shouldn't block up the tasks much.
-    state: Arc<Mutex<LimitState<T>>>,
+    semaphore: Arc<Semaphore>,
+    inner: Arc<Mutex<T>>,
 }
 
 impl<T> Limited<T>
@@ -143,37 +136,42 @@ where
 {
     pub fn new(base: T, count: usize) -> Limited<T> {
         Limited {
-            state: Arc::new(Mutex::new(LimitState {
-                base,
-                available: count,
-                wakers: Default::default(),
-            })),
+            semaphore: Arc::new(Semaphore::new(count)),
+            inner: Arc::new(Mutex::new(base)),
         }
     }
 
-    pub fn take(&self) -> LimitFuture<T> {
-        LimitFuture {
-            state: self.state.clone(),
+    pub async fn take(&self) -> InUse<T> {
+        let semaphore = self.semaphore.clone();
+        let mut permit = Permit::new();
+        poll_fn(|cx| permit.poll_acquire(cx, &semaphore))
+            .await
+            .unwrap();
+
+        // Permit is now acquired.
+        let inner = self.inner.lock().unwrap();
+
+        InUse {
+            semaphore: self.semaphore.clone(),
+            permit,
+            inner: inner.deref().clone(),
         }
     }
 }
 
 pub(crate) struct InUse<T> {
-    state: Arc<Mutex<LimitState<T>>>,
-    released: bool,
+    semaphore: Arc<Semaphore>,
+    permit: Permit,
     inner: T,
 }
 
 impl<T> InUse<T> {
     pub fn release(&mut self) {
-        let mut state = self.state.lock().unwrap();
-        state.available += 1;
-
-        for waker in state.wakers.drain(..) {
-            waker.wake();
+        if !self.permit.is_acquired() {
+            return;
         }
 
-        self.released = true;
+        self.permit.release(&self.semaphore);
     }
 }
 
@@ -193,34 +191,6 @@ impl<T> DerefMut for InUse<T> {
 
 impl<T> Drop for InUse<T> {
     fn drop(&mut self) {
-        if !self.released {
-            self.release();
-        }
-    }
-}
-
-pub(crate) struct LimitFuture<T> {
-    state: Arc<Mutex<LimitState<T>>>,
-}
-
-impl<T> Future for LimitFuture<T>
-where
-    T: Clone,
-{
-    type Output = InUse<T>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<InUse<T>> {
-        let mut state = self.state.lock().unwrap();
-        if state.available > 0 {
-            state.available -= 1;
-            Poll::Ready(InUse {
-                inner: state.base.clone(),
-                state: self.state.clone(),
-                released: false,
-            })
-        } else {
-            state.wakers.push(cx.waker().clone());
-            Poll::Pending
-        }
+        self.release();
     }
 }
