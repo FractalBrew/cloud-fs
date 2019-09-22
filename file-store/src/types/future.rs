@@ -51,6 +51,10 @@ where
             base: Box::pin(ready(value)),
         }
     }
+
+    pub(crate) fn poll_inner(&mut self, cx: &mut Context) -> FuturePoll<R> {
+        self.base.as_mut().poll(cx)
+    }
 }
 
 impl<R> Future for WrappedFuture<R>
@@ -60,6 +64,6 @@ where
     type Output = R;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> FuturePoll<R> {
-        self.base.as_mut().poll(cx)
+        self.poll_inner(cx)
     }
 }

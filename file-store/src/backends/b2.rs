@@ -44,7 +44,7 @@
 
 mod client;
 
-use std::convert::TryInto;
+use std::convert::{Infallible, TryInto};
 use std::future::Future;
 use std::pin::Pin;
 use std::slice::Iter;
@@ -72,15 +72,20 @@ use storage_types::b2::v2::{FileAction, UserFileInfo, LAST_MODIFIED_KEY};
 use super::Backend;
 use crate::types::stream::{MergedStreams, ResultStreamPoll};
 use crate::types::*;
-use crate::utils::{into_data_stream, Limited};
+use crate::utils::{into_data_stream, Acquired, CloningPool};
 use crate::{FileStore, StorageBackend};
 use client::{B2Client, B2ClientState};
-
-type Client = HyperClient<HttpsConnector<HttpConnector>>;
 
 const TOTAL_MAX_SMALL_FILE_SIZE: u64 = 5 * 1000 * 1000 * 1000;
 const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 200 * 1000 * 1000;
 const DEFAULT_REQUEST_LIMIT: usize = 20;
+
+type ClientPool = CloningPool<HyperClient<HttpsConnector<HttpConnector>>>;
+type Client = Acquired<
+    HyperClient<HttpsConnector<HttpConnector>>,
+    HyperClient<HttpsConnector<HttpConnector>>,
+    Infallible,
+>;
 
 impl From<http::Error> for StorageError {
     fn from(error: http::Error) -> StorageError {
@@ -296,7 +301,6 @@ where
     };
 
     let result = client
-        .clone()
         .b2_start_large_file(info.path.clone(), request)
         .await
         .map_err(TransferError::TargetError)?;
@@ -877,7 +881,7 @@ impl B2BackendBuilder {
                 state: Arc::new(B2ClientState {
                     settings: self.settings,
                     next_id: Default::default(),
-                    clients: Limited::new(client, self.max_requests),
+                    clients: ClientPool::new(client, Some(self.max_requests)),
                     session: Default::default(),
                 }),
             };

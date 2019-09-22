@@ -14,19 +14,22 @@
 
 //! A set of useful utilities for converting between the different asynchronous
 //! types that this crate uses.
+use std::convert::Infallible;
+use std::fmt;
+use std::future::Future;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use bytes::buf::FromBuf;
 use bytes::{BytesMut, IntoBuf};
-use futures::future::poll_fn;
+use futures::future::FutureExt;
 use futures::stream::{Stream, StreamExt};
 use tokio_io::{AsyncRead, BufReader};
-use tokio_sync::semaphore::{Permit, Semaphore};
 
+use crate::future::WrappedFuture;
 use crate::types::{Data, StorageError};
 
 /// Converts an AsyncRead into a stream that emits [`Data`](../type.Data.html).
@@ -121,76 +124,303 @@ where
     })
 }
 
+struct PoolState<C, T, E>
+where
+    C: fmt::Debug,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    context: C,
+    callback: Box<dyn Fn(&C) -> WrappedFuture<Result<T, E>> + Send>,
+    ready: Vec<T>,
+    available: Option<usize>,
+    wakers: Vec<Waker>,
+}
+
+impl<C, T, E> fmt::Debug for PoolState<C, T, E>
+where
+    C: fmt::Debug,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "LimitedState {{ context: {:?}, available: {:?}, ready: {}, wakers: {} }}",
+            self.context,
+            self.available,
+            self.ready.len(),
+            self.wakers.len()
+        )
+    }
+}
+
+impl<C, T, E> PoolState<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    fn new<F>(context: C, count: Option<usize>, callback: F) -> PoolState<C, T, E>
+    where
+        F: Fn(&C) -> WrappedFuture<Result<T, E>> + Send + 'static,
+    {
+        PoolState {
+            context,
+            callback: Box::new(callback),
+            ready: Default::default(),
+            available: count,
+            wakers: Default::default(),
+        }
+    }
+
+    fn awaken(&mut self) {
+        for waker in self.wakers.drain(..) {
+            waker.wake();
+        }
+    }
+
+    fn release(&mut self, t: Option<T>) {
+        match t {
+            Some(t) => self.ready.push(t),
+            None => {
+                if let Some(count) = self.available.take() {
+                    self.available = Some(count + 1);
+                }
+            }
+        }
+        self.awaken();
+    }
+}
+
 #[derive(Debug, Clone)]
-pub(crate) struct Limited<T>
+pub(crate) struct Pool<C, T, E>
 where
-    T: Clone,
+    C: fmt::Debug,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
 {
-    semaphore: Arc<Semaphore>,
-    inner: Arc<Mutex<T>>,
+    state: Arc<Mutex<PoolState<C, T, E>>>,
 }
 
-impl<T> Limited<T>
+impl<C, T, E> Pool<C, T, E>
 where
-    T: Clone,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+    C: fmt::Debug + Send,
 {
-    pub fn new(base: T, count: usize) -> Limited<T> {
-        Limited {
-            semaphore: Arc::new(Semaphore::new(count)),
-            inner: Arc::new(Mutex::new(base)),
+    pub fn new<F>(context: C, count: Option<usize>, callback: F) -> Pool<C, T, E>
+    where
+        F: Fn(&C) -> WrappedFuture<Result<T, E>> + Send + 'static,
+    {
+        Pool {
+            state: Arc::new(Mutex::new(PoolState::new(context, count, callback))),
         }
     }
 
-    pub async fn take(&self) -> InUse<T> {
-        let semaphore = self.semaphore.clone();
-        let mut permit = Permit::new();
-        poll_fn(|cx| permit.poll_acquire(cx, &semaphore))
-            .await
-            .unwrap();
+    pub async fn acquire(&self) -> Result<Acquired<C, T, E>, E> {
+        let future = AcquireFuture {
+            pending: None,
+            state: self.state.clone(),
+        };
 
-        // Permit is now acquired.
-        let inner = self.inner.lock().unwrap();
+        future.await
+    }
+}
 
-        InUse {
-            semaphore: self.semaphore.clone(),
-            permit,
-            inner: inner.deref().clone(),
+pub(crate) struct AcquireFuture<C, T, E>
+where
+    C: fmt::Debug,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    pending: Option<WrappedFuture<Result<T, E>>>,
+    state: Arc<Mutex<PoolState<C, T, E>>>,
+}
+
+impl<C, T, E> AcquireFuture<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    fn result(&self, t: T) -> Acquired<C, T, E> {
+        Acquired {
+            state: self.state.clone(),
+            inner: Some(t),
+        }
+    }
+
+    fn poll_inner(
+        &mut self,
+        mut future: WrappedFuture<Result<T, E>>,
+        cx: &mut Context,
+    ) -> Poll<<Self as Future>::Output> {
+        match future.poll_inner(cx) {
+            Poll::Ready(Ok(t)) => Poll::Ready(Ok(self.result(t))),
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Pending => {
+                self.pending = Some(future);
+                Poll::Pending
+            }
         }
     }
 }
 
-pub(crate) struct InUse<T> {
-    semaphore: Arc<Semaphore>,
-    permit: Permit,
-    inner: T,
+impl<C, T, E> Future for AcquireFuture<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    type Output = Result<Acquired<C, T, E>, E>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        if let Some(future) = this.pending.take() {
+            return this.poll_inner(future, cx);
+        }
+
+        let future = {
+            let mut state = this.state.lock().unwrap();
+
+            if !state.ready.is_empty() {
+                return Poll::Ready(Ok(this.result(state.ready.remove(0))));
+            } else if let Some(avail) = state.available {
+                if avail > 0 {
+                    state.available = Some(avail - 1);
+                    let callback = &state.callback;
+                    callback(&state.context)
+                } else {
+                    state.wakers.push(cx.waker().clone());
+                    return Poll::Pending;
+                }
+            } else {
+                let callback = &state.callback;
+                callback(&state.context)
+            }
+        };
+
+        this.poll_inner(future, cx)
+    }
 }
 
-impl<T> InUse<T> {
+pub(crate) struct Acquired<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    state: Arc<Mutex<PoolState<C, T, E>>>,
+    inner: Option<T>,
+}
+
+impl<C, T, E> Acquired<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    // pub fn destroy(&mut self) {
+    //     if self.inner.take().is_some() {
+    //         let mut state = self.state.lock().unwrap();
+    //         state.release(None);
+    //     }
+    // }
+
     pub fn release(&mut self) {
-        if !self.permit.is_acquired() {
-            return;
+        if let Some(t) = self.inner.take() {
+            let mut state = self.state.lock().unwrap();
+            state.release(Some(t));
         }
-
-        self.permit.release(&self.semaphore);
     }
 }
 
-impl<T> Deref for InUse<T> {
+impl<C, T, E> Drop for Acquired<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl<C, T, E> Deref for Acquired<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
     type Target = T;
 
     fn deref(&self) -> &T {
-        &self.inner
+        &self.inner.as_ref().unwrap()
     }
 }
 
-impl<T> DerefMut for InUse<T> {
+impl<C, T, E> DerefMut for Acquired<C, T, E>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
     fn deref_mut(&mut self) -> &mut T {
-        &mut self.inner
+        self.inner.as_mut().unwrap()
     }
 }
 
-impl<T> Drop for InUse<T> {
-    fn drop(&mut self) {
-        self.release();
+#[derive(Debug, Clone)]
+pub(crate) struct InfalliblePool<C, T>
+where
+    C: fmt::Debug,
+    T: fmt::Debug + Send + 'static,
+{
+    inner: Pool<C, T, Infallible>,
+}
+
+impl<C, T> InfalliblePool<C, T>
+where
+    C: fmt::Debug + Send,
+    T: fmt::Debug + Send + 'static,
+{
+    pub fn new<F>(context: C, count: Option<usize>, callback: F) -> InfalliblePool<C, T>
+    where
+        F: Fn(&C) -> WrappedFuture<T> + Send + Sync + 'static,
+    {
+        InfalliblePool {
+            inner: Pool::new(context, count, move |c| {
+                WrappedFuture::<T>::from_future(callback(c).map(Ok))
+            }),
+        }
+    }
+
+    pub async fn acquire(&self) -> Acquired<C, T, Infallible> {
+        self.inner.acquire().await.unwrap()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CloningPool<T>
+where
+    T: fmt::Debug + Send + Clone + 'static,
+{
+    inner: InfalliblePool<T, T>,
+}
+
+impl<T> CloningPool<T>
+where
+    T: fmt::Debug + Send + Clone + 'static,
+{
+    pub fn new(base: T, count: Option<usize>) -> CloningPool<T> {
+        CloningPool {
+            inner: InfalliblePool::new(base, count, |t| WrappedFuture::from_value(t.clone())),
+        }
+    }
+
+    pub async fn acquire(&self) -> Acquired<T, T, Infallible> {
+        self.inner.acquire().await
     }
 }

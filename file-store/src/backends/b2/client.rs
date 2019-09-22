@@ -42,10 +42,9 @@ use storage_types::b2::v2::{
     B2_HEADER_FILE_NAME, B2_HEADER_PART_NUMBER,
 };
 
-use super::{B2Settings, Client};
+use super::{B2Settings, Client, ClientPool};
 use crate::types::stream::AfterStream;
 use crate::types::*;
-use crate::utils::{InUse, Limited};
 
 const MAX_API_RETRIES: usize = 5;
 
@@ -123,11 +122,10 @@ macro_rules! b2_api {
 pub(super) struct B2ClientState {
     pub settings: B2Settings,
     pub next_id: Arc<AtomicUsize>,
-    pub clients: Limited<Client>,
+    pub clients: ClientPool,
     pub session: Mutex<Option<AuthorizeAccountResponse>>,
 }
 
-#[derive(Debug)]
 pub(super) struct B2Client {
     pub id: usize,
     pub state: Arc<B2ClientState>,
@@ -151,7 +149,7 @@ impl B2Client {
         self,
         method: &str,
         path: ObjectPath,
-        client: &InUse<Client>,
+        client: &Client,
         request: Request<Body>,
     ) -> StorageResult<Response<Body>> {
         let id = self.id;
@@ -185,7 +183,7 @@ impl B2Client {
         self,
         method: &str,
         path: ObjectPath,
-        mut client: InUse<Client>,
+        mut client: Client,
         request: Request<Body>,
     ) -> StorageResult<R>
     where
@@ -241,7 +239,7 @@ impl B2Client {
             .header(header::USER_AGENT, &self.state.settings.user_agent)
             .body(Body::empty())?;
 
-        let client = self.state.clients.take().await;
+        let client = self.state.clients.acquire().await;
         let empty = ObjectPath::empty();
         self.basic_request("b2_authorize_account", empty, client, request)
             .await
@@ -275,7 +273,7 @@ impl B2Client {
                 .header(header::USER_AGENT, &self.state.settings.user_agent)
                 .body(data.into())?;
 
-            let client = self.state.clients.take().await;
+            let client = self.state.clients.acquire().await;
 
             match self
                 .clone()
@@ -357,7 +355,7 @@ impl B2Client {
                 ))
                 .body(Body::empty())?;
 
-            let mut client = self.state.clients.take().await;
+            let mut client = self.state.clients.acquire().await;
             match self
                 .clone()
                 .request("b2_download_file_by_name", path.clone(), &client, request)
@@ -370,6 +368,7 @@ impl B2Client {
                     return Ok(stream);
                 }
                 Err(e) => {
+                    client.release();
                     if e.kind() == error::StorageErrorKind::AccessExpired {
                         self.reset_session(&authorization).await;
 
@@ -419,7 +418,7 @@ impl B2Client {
                 iter(data.clone()).map(Ok::<_, StorageError>),
             ))?;
 
-            let client = self.state.clients.take().await;
+            let client = self.state.clients.acquire().await;
             match self
                 .clone()
                 .basic_request("b2_upload_file", path.clone(), client, request)
@@ -462,7 +461,7 @@ impl B2Client {
                     iter(data.clone()).map(Ok::<_, StorageError>),
                 ))?;
 
-            let client = self.state.clients.take().await;
+            let client = self.state.clients.acquire().await;
             match self
                 .clone()
                 .basic_request("b2_upload_part", path.clone(), client, request)
