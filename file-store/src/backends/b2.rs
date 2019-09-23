@@ -87,36 +87,6 @@ type Client = Acquired<
     Infallible,
 >;
 
-impl From<http::Error> for StorageError {
-    fn from(error: http::Error) -> StorageError {
-        error::other_error(&error.to_string(), Some(error))
-    }
-}
-
-impl From<hyper::error::Error> for StorageError {
-    fn from(error: hyper::error::Error) -> StorageError {
-        if error.is_parse() || error.is_user() {
-            error::invalid_data(&error.to_string(), Some(error))
-        } else if error.is_canceled() {
-            error::cancelled(&error.to_string(), Some(error))
-        } else if error.is_closed() {
-            error::connection_closed(&error.to_string(), Some(error))
-        } else if error.is_connect() {
-            error::connection_failed(&error.to_string(), Some(error))
-        } else if error.is_incomplete_message() {
-            error::connection_closed(&error.to_string(), Some(error))
-        } else {
-            error::invalid_data(&error.to_string(), Some(error))
-        }
-    }
-}
-
-impl From<serde_json::error::Error> for StorageError {
-    fn from(error: serde_json::error::Error) -> StorageError {
-        error::internal_error("Failes to encode request data.", Some(error))
-    }
-}
-
 #[derive(Clone, Debug)]
 struct FileVersions {
     versions: Vec<FileInfo>,
@@ -308,12 +278,9 @@ where
     let file_id = match result.file_id {
         Some(s) => s,
         None => {
-            return Err(TransferError::TargetError(error::invalid_data::<
-                StorageError,
-            >(
+            return Err(TransferError::TargetError(error::invalid_data(Some(
                 "Attempt to request large file upload failed.",
-                None,
-            )))
+            ))))
         }
     };
 
@@ -773,11 +740,11 @@ impl B2Backend {
         let mut file_part = prefix.join(&path);
         let bucket_name = match file_part.unshift_part() {
             Some(b) => b,
-            None => return Err(error::not_found::<StorageError>(path, None)),
+            None => return Err(error::not_found(path, None)),
         };
 
         if file_part.is_empty() {
-            return Err(error::not_found::<StorageError>(path, None));
+            return Err(error::not_found(path, None));
         }
 
         let request = ListBucketsRequest {
@@ -789,7 +756,7 @@ impl B2Backend {
 
         let mut buckets = client.b2_list_buckets(path.clone(), request).await?.buckets;
         if buckets.len() != 1 {
-            return Err(error::not_found::<StorageError>(path, None));
+            return Err(error::not_found(path, None));
         }
 
         Ok((buckets.remove(0), file_part.to_string()))
@@ -868,10 +835,10 @@ impl B2BackendBuilder {
             let connector = match HttpsConnector::new() {
                 Ok(c) => c,
                 Err(e) => {
-                    return Err(error::connection_failed(
-                        "Could not create http connection.",
-                        Some(e),
-                    ))
+                    return Err(error::connection_failed(Some(&format!(
+                        "Could not create http connection: {}.",
+                        e
+                    ))))
                 }
             };
 
@@ -1021,7 +988,7 @@ impl StorageBackend for B2Backend {
                 .try_collect()
                 .await?;
             if files.len() != 1 {
-                return Err(error::not_found::<StorageError>(path, None));
+                return Err(error::not_found(path, None));
             }
 
             new_object(&bucket.bucket_name, files.remove(0), &backend_prefix)
@@ -1035,7 +1002,7 @@ impl StorageBackend for B2Backend {
         if path.is_dir_prefix() {
             return ObjectFuture::from_value(Err(error::invalid_path(
                 path,
-                "Object paths cannot be empty or end with a '/' character.",
+                Some("Object paths cannot be empty or end with a '/' character."),
             )));
         }
 
@@ -1057,7 +1024,7 @@ impl StorageBackend for B2Backend {
         if path.is_dir_prefix() {
             return DataStreamFuture::from_value(Err(error::invalid_path(
                 path,
-                "Object paths cannot be empty or end with a '/' character.",
+                Some("Object paths cannot be empty or end with a '/' character."),
             )));
         }
 
@@ -1067,7 +1034,7 @@ impl StorageBackend for B2Backend {
             _ => {
                 return DataStreamFuture::from_value(Err(error::invalid_path(
                     path,
-                    "Object paths cannot be empty.",
+                    Some("Object paths cannot be empty."),
                 )));
             }
         };
@@ -1095,10 +1062,9 @@ impl StorageBackend for B2Backend {
             {
                 Ok(o) => o,
                 Err(_) => {
-                    return Err(error::internal_error::<StorageError>(
+                    return Err(error::internal_error(Some(
                         "Failed to convert retrieved object to the expected type.",
-                        None,
-                    ));
+                    )));
                 }
             };
 
@@ -1117,10 +1083,9 @@ impl StorageBackend for B2Backend {
                             .await?;
                     }
                     None => {
-                        return Err(error::internal_error::<StorageError>(
+                        return Err(error::internal_error(Some(
                             "Expected object to have a file id.",
-                            None,
-                        ));
+                        )));
                     }
                 }
             }
@@ -1181,7 +1146,7 @@ impl StorageBackend for B2Backend {
             return WriteCompleteFuture::from_value(Err(TransferError::TargetError(
                 error::invalid_path(
                     path,
-                    "Object paths cannot be empty or end with a '/' character.",
+                    Some("Object paths cannot be empty or end with a '/' character."),
                 ),
             )));
         }

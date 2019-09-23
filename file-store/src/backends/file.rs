@@ -149,8 +149,8 @@ impl File {
 
 fn get_storage_error(error: io::Error, path: ObjectPath) -> StorageError {
     match error.kind() {
-        io::ErrorKind::NotFound => error::not_found(path, Some(error)),
-        _ => error::other_error(&path.to_string(), Some(error)),
+        io::ErrorKind::NotFound => error::not_found(path, Some(&error.to_string())),
+        _ => error::other_error(Some(&error.to_string())),
     }
 }
 
@@ -270,10 +270,7 @@ fn directory_stream(
                     let filename = match fname.into_string() {
                         Ok(f) => f,
                         Err(_) => {
-                            return Err(error::invalid_data::<StorageError>(
-                                "Unable to convert OSString.",
-                                None,
-                            ))
+                            return Err(error::invalid_data(Some("Unable to convert OSString.")))
                         }
                     };
 
@@ -391,10 +388,9 @@ impl FileBackend {
             let metadata =
                 wrap_future(symlink_metadata(target.clone()), ObjectPath::empty()).await?;
             if !metadata.is_dir() {
-                Err(error::invalid_settings::<StorageError>(
+                Err(error::invalid_settings(Some(
                     "Root path is not a directory.",
-                    None,
-                ))
+                )))
             } else {
                 Ok(FileStore::from(FileBackend {
                     space: FileSpace { base: target },
@@ -452,10 +448,9 @@ impl StorageBackend for FileBackend {
                                 let file_name = match entry.file_name().into_string() {
                                     Ok(s) => s,
                                     Err(_) => {
-                                        return Err(error::invalid_data::<StorageError>(
+                                        return Err(error::invalid_data(Some(
                                             "Unable to convert OSString.",
-                                            None,
-                                        ))
+                                        )))
                                     }
                                 };
 
@@ -494,7 +489,7 @@ impl StorageBackend for FileBackend {
                 Ok(m) => Ok(get_object(path, Some(m))),
                 Err(e) => {
                     if e.kind() == io::ErrorKind::NotFound {
-                        Err(error::not_found(path, Some(e)))
+                        Err(error::not_found(path, Some(&e.to_string())))
                     } else {
                         Ok(get_object(path, None))
                     }
@@ -510,7 +505,7 @@ impl StorageBackend for FileBackend {
         if path.is_dir_prefix() {
             return ObjectFuture::from_value(Err(error::invalid_path(
                 path,
-                "Object paths cannot be empty or end with a '/' character.",
+                Some("Object paths cannot be empty or end with a '/' character."),
             )));
         }
 
@@ -527,7 +522,7 @@ impl StorageBackend for FileBackend {
 
             let metadata = wrap_future(symlink_metadata(target.clone()), path.clone()).await?;
             if !metadata.is_file() {
-                return Err(error::not_found::<StorageError>(path, None));
+                return Err(error::not_found(path, None));
             }
 
             let file = wrap_future(File::open(target), path.clone()).await?;

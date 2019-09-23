@@ -30,12 +30,16 @@ pub enum StorageErrorKind {
     InvalidPath(ObjectPath),
     /// The object requested was not found.
     NotFound(ObjectPath),
+    /// The object already exists.
+    AlreadyExists(ObjectPath),
     /// The operation was cancelled.
     Cancelled,
     /// The connection to storage failed.
     ConnectionFailed,
     /// The connection to storage was closed.
     ConnectionClosed,
+    /// The service experienced an unknown failure.
+    ServiceError,
     /// The service returned some invalid data.
     InvalidData,
     /// The credentials supplied were denied access.
@@ -45,6 +49,8 @@ pub enum StorageErrorKind {
     /// An error returned if the configuration for a backend was invalid
     /// somehow.
     InvalidSettings,
+    /// Some kind of limit on use use of the service has been reached.
+    OverQuota,
     /// An internal failure, please report a bug!
     InternalError,
     /// Any other type of error (normally will have an inner error).
@@ -56,29 +62,15 @@ pub enum StorageErrorKind {
 #[derive(Debug)]
 pub struct StorageError {
     kind: StorageErrorKind,
-    detail: String,
-    inner: Option<Box<dyn error::Error + Send + Sync>>,
+    detail: Option<String>,
 }
 
 impl StorageError {
     /// Creates a new `StorageError`.
-    pub fn new(kind: StorageErrorKind, detail: &str) -> StorageError {
+    pub fn new(kind: StorageErrorKind, detail: Option<&str>) -> StorageError {
         StorageError {
             kind,
-            detail: detail.to_owned(),
-            inner: None,
-        }
-    }
-
-    /// Creates a new `StorageError` wrapping an inner error.
-    pub fn from_inner<E>(kind: StorageErrorKind, detail: &str, inner: E) -> StorageError
-    where
-        E: 'static + error::Error + Send + Sync,
-    {
-        StorageError {
-            kind,
-            detail: detail.to_owned(),
-            inner: Some(Box::new(inner)),
+            detail: detail.map(ToOwned::to_owned),
         }
     }
 
@@ -86,45 +78,67 @@ impl StorageError {
     pub fn kind(&self) -> StorageErrorKind {
         self.kind.clone()
     }
+
+    // fn write<A, B>(&self, f: &mut fmt::Formatter, with_detail: A, without_detail: B) -> fmt::Result
+    // where
+    //     A: AsRef<str>,
+    //     B: AsRef<str>,
+    // {
+    //     match self.detail {
+    //         Some(ref detail) => f.pad(&with_detail.as_ref().replace("{}", detail)),
+    //         None => f.pad(without_detail.as_ref()),
+    //     }
+    // }
+
+    fn default_write<A>(&self, f: &mut fmt::Formatter, message: A) -> fmt::Result
+    where
+        A: AsRef<str>,
+    {
+        match self.detail {
+            Some(ref detail) => write!(f, "{}: {}.", message.as_ref(), detail),
+            None => write!(f, "{}.", message.as_ref()),
+        }
+    }
 }
 
 impl error::Error for StorageError {}
-
-macro_rules! write {
-    ($f:expr, $($info:tt)*) => {
-        $f.pad(&format!($($info)*))
-    };
-}
 
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.kind {
             StorageErrorKind::ObjectPathParse(s) => {
-                write!(f, "Failed to parse '{}'. {}", &s, &self.detail)
+                self.default_write(f, format!("Failed to parse '{}'", s))
             }
-            StorageErrorKind::InvalidPath(p) => write!(f, "The path '{}' was invalid", p),
-            StorageErrorKind::NotFound(p) => write!(f, "The path '{}' was not found", p),
-            StorageErrorKind::InvalidData => write!(f, "Invalid data: {}", &self.detail),
-            StorageErrorKind::Cancelled => {
-                write!(f, "The operation was cancelled: {}", &self.detail)
+            StorageErrorKind::InvalidPath(p) => {
+                self.default_write(f, format!("The path '{}' was invalid", p))
             }
+            StorageErrorKind::NotFound(p) => {
+                self.default_write(f, format!("The path '{}' was not found", p))
+            }
+            StorageErrorKind::AlreadyExists(p) => {
+                self.default_write(f, format!("The path '{}' already exists", p))
+            }
+            StorageErrorKind::InvalidData => self.default_write(f, "Invalid data"),
+            StorageErrorKind::Cancelled => self.default_write(f, "The operation was cancelled"),
             StorageErrorKind::ConnectionFailed => {
-                write!(f, "The storage connection failed: {}", &self.detail)
+                self.default_write(f, "The storage connection failed")
             }
             StorageErrorKind::ConnectionClosed => {
-                write!(f, "The storage connection was closed: {}", &self.detail)
+                self.default_write(f, "The storage connection was closed")
             }
-            StorageErrorKind::Other => write!(f, "An unknown error ocurred: {}", &self.detail),
-            StorageErrorKind::InternalError => {
-                write!(f, "An internal error occurred: {}", &self.detail)
+            StorageErrorKind::Other => self.default_write(f, "An unknown error ocurred"),
+            StorageErrorKind::InternalError => self.default_write(f, "An internal error occurred"),
+            StorageErrorKind::AccessDenied => self.default_write(f, "Access was denied"),
+            StorageErrorKind::AccessExpired => self.default_write(f, "Access has expired"),
+            StorageErrorKind::InvalidSettings => {
+                self.default_write(f, "Some of the settings passed were invalid")
             }
-            StorageErrorKind::AccessDenied => write!(f, "Access was denied: {}", &self.detail),
-            StorageErrorKind::AccessExpired => write!(f, "Access has expired: {}", &self.detail),
-            StorageErrorKind::InvalidSettings => write!(
-                f,
-                "Some of the settings passed were invalid: {}",
-                &self.detail
-            ),
+            StorageErrorKind::OverQuota => {
+                self.default_write(f, "A storage limit has been reached")
+            }
+            StorageErrorKind::ServiceError => {
+                self.default_write(f, "The storage system encountered an error")
+            }
         }
     }
 }
@@ -135,6 +149,7 @@ impl From<StorageError> for io::Error {
             StorageErrorKind::ObjectPathParse(_) => io::ErrorKind::InvalidData,
             StorageErrorKind::InvalidPath(_) => io::ErrorKind::InvalidData,
             StorageErrorKind::NotFound(_) => io::ErrorKind::NotFound,
+            StorageErrorKind::AlreadyExists(_) => io::ErrorKind::AlreadyExists,
             StorageErrorKind::InvalidData => io::ErrorKind::InvalidData,
             StorageErrorKind::InvalidSettings => io::ErrorKind::InvalidInput,
             StorageErrorKind::Cancelled => io::ErrorKind::ConnectionAborted,
@@ -144,6 +159,8 @@ impl From<StorageError> for io::Error {
             StorageErrorKind::Other => io::ErrorKind::Other,
             StorageErrorKind::AccessDenied => io::ErrorKind::PermissionDenied,
             StorageErrorKind::AccessExpired => io::ErrorKind::PermissionDenied,
+            StorageErrorKind::ServiceError => io::ErrorKind::Other,
+            StorageErrorKind::OverQuota => io::ErrorKind::Other,
         };
 
         io::Error::new(kind, error)
@@ -154,6 +171,7 @@ impl From<io::Error> for StorageError {
     fn from(error: io::Error) -> StorageError {
         let kind = match error.kind() {
             io::ErrorKind::NotFound => StorageErrorKind::NotFound(ObjectPath::empty()),
+            io::ErrorKind::AlreadyExists => StorageErrorKind::AlreadyExists(ObjectPath::empty()),
             io::ErrorKind::PermissionDenied => StorageErrorKind::AccessDenied,
             io::ErrorKind::ConnectionRefused => StorageErrorKind::ConnectionFailed,
             io::ErrorKind::ConnectionReset => StorageErrorKind::ConnectionClosed,
@@ -167,8 +185,7 @@ impl From<io::Error> for StorageError {
 
         StorageError {
             kind,
-            detail: error.to_string(),
-            inner: Some(Box::new(error)),
+            detail: Some(error.to_string()),
         }
     }
 }
@@ -191,129 +208,63 @@ pub enum TransferError {
     TargetError(StorageError),
 }
 
-pub fn parse_error(spec: &str, message: &str) -> StorageError {
-    StorageError {
-        kind: StorageErrorKind::ObjectPathParse(spec.to_owned()),
-        detail: message.to_owned(),
-        inner: None,
-    }
+pub fn parse_error(spec: &str, detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::ObjectPathParse(spec.to_owned()), detail)
 }
 
-pub fn invalid_path(path: ObjectPath, detail: &str) -> StorageError {
-    StorageError {
-        kind: StorageErrorKind::InvalidPath(path),
-        detail: detail.to_owned(),
-        inner: None,
-    }
+pub fn invalid_path(path: ObjectPath, detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::InvalidPath(path), detail)
 }
 
-pub fn not_found<E>(path: ObjectPath, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::NotFound(path),
-        detail: String::new(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn not_found(path: ObjectPath, detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::NotFound(path), detail)
 }
 
-pub fn access_denied<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::AccessDenied,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn already_exists(path: ObjectPath, detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::AlreadyExists(path), detail)
 }
 
-pub fn access_expired<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::AccessExpired,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn over_quota(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::OverQuota, detail)
 }
 
-pub fn invalid_settings<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::InvalidSettings,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn access_denied(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::AccessDenied, detail)
 }
 
-pub fn invalid_data<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::InvalidData,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn access_expired(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::AccessExpired, detail)
 }
 
-pub fn cancelled<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::Cancelled,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn invalid_settings(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::InvalidSettings, detail)
 }
 
-pub fn connection_failed<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::ConnectionFailed,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn service_error(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::ServiceError, detail)
 }
 
-pub fn connection_closed<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::ConnectionClosed,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn invalid_data(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::InvalidData, detail)
 }
 
-pub fn internal_error<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
+pub fn cancelled(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::Cancelled, detail)
+}
+
+pub fn connection_failed(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::ConnectionFailed, detail)
+}
+
+pub fn connection_closed(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::ConnectionClosed, detail)
+}
+
+pub fn internal_error(detail: Option<&str>) -> StorageError {
     error!("An internal error occurred");
-    StorageError {
-        kind: StorageErrorKind::InternalError,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+    StorageError::new(StorageErrorKind::InternalError, detail)
 }
 
-pub fn other_error<E>(detail: &str, error: Option<E>) -> StorageError
-where
-    E: 'static + error::Error + Send + Sync,
-{
-    StorageError {
-        kind: StorageErrorKind::Other,
-        detail: detail.to_owned(),
-        inner: error.map(|e| Box::new(e) as _),
-    }
+pub fn other_error(detail: Option<&str>) -> StorageError {
+    StorageError::new(StorageErrorKind::Other, detail)
 }

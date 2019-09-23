@@ -44,7 +44,7 @@ impl ObjectPath {
         if path.starts_with('/') {
             Err(error::parse_error(
                 path,
-                "ObjectPaths cannot start with the '/' character.",
+                Some("ObjectPaths cannot start with the '/' character."),
             ))
         } else {
             Ok(ObjectPath {

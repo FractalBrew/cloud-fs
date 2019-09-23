@@ -48,60 +48,186 @@ use crate::types::*;
 
 const MAX_API_RETRIES: usize = 5;
 
-fn generate_error(
-    method: &str,
-    client_id: usize,
-    path: &ObjectPath,
-    response: &str,
-) -> StorageError {
-    let error: ErrorResponse = match from_str(response) {
+struct B2Error {
+    error: StorageError,
+    needs_auth: bool,
+    can_retry: bool,
+}
+
+impl From<B2Error> for StorageError {
+    fn from(error: B2Error) -> StorageError {
+        error.error
+    }
+}
+
+type B2Result<T> = Result<T, B2Error>;
+
+impl From<hyper::error::Error> for B2Error {
+    fn from(hyper_error: hyper::error::Error) -> B2Error {
+        fn error(error: StorageError, can_retry: bool) -> B2Error {
+            B2Error {
+                error,
+                needs_auth: false,
+                can_retry,
+            }
+        }
+
+        if hyper_error.is_parse() || hyper_error.is_user() {
+            error(error::invalid_data(Some(&hyper_error.to_string())), false)
+        } else if hyper_error.is_canceled() {
+            error(error::cancelled(Some(&hyper_error.to_string())), true)
+        } else if hyper_error.is_closed() {
+            error(
+                error::connection_closed(Some(&hyper_error.to_string())),
+                true,
+            )
+        } else if hyper_error.is_connect() {
+            error(
+                error::connection_failed(Some(&hyper_error.to_string())),
+                true,
+            )
+        } else if hyper_error.is_incomplete_message() {
+            error(
+                error::connection_closed(Some(&hyper_error.to_string())),
+                true,
+            )
+        } else {
+            error(error::invalid_data(Some(&hyper_error.to_string())), true)
+        }
+    }
+}
+
+impl From<hyper::error::Error> for StorageError {
+    fn from(hyper_error: hyper::error::Error) -> StorageError {
+        let b2_error: B2Error = hyper_error.into();
+        b2_error.into()
+    }
+}
+
+impl From<http::Error> for StorageError {
+    fn from(error: http::Error) -> StorageError {
+        error::other_error(Some(&error.to_string()))
+    }
+}
+
+impl From<serde_json::error::Error> for StorageError {
+    fn from(error: serde_json::error::Error) -> StorageError {
+        error::internal_error(Some(&format!("Failed to encode request data: {}", error)))
+    }
+}
+
+fn generate_error(method: &str, client_id: usize, path: &ObjectPath, response: &str) -> B2Error {
+    fn error(error: StorageError) -> B2Error {
+        B2Error {
+            error,
+            needs_auth: false,
+            can_retry: false,
+        }
+    }
+
+    let error_info: ErrorResponse = match from_str(response) {
         Ok(r) => r,
         Err(e) => {
             error!(
                 "Client {:04}: Unable to parse ErrorResponse structure from {}.",
                 client_id, response
             );
-            return error::invalid_data(
-                &format!("Unable to parse error response from {}.", method),
-                Some(e),
-            );
+            return error(error::invalid_data(Some(&format!(
+                "Unable to parse error response from {}: {}.",
+                method, e
+            ))));
         }
     };
     warn!(
         "Client {:04}: The API call {} failed with {:?}",
-        client_id, method, error
+        client_id, method, error_info
     );
 
-    match (method, error.status, error.code.as_str()) {
-        ("b2_authorize_account", 401, "bad_auth_token") => error::access_denied::<StorageError>(
-            "The application key id or key were not recognized.",
-            None,
-        ),
-        (_, 400, "bad_request") => error::internal_error::<StorageError>(&error.message, None),
-        (_, 400, "invalid_bucket_id") => error::not_found::<StorageError>(path.to_owned(), None),
-        (_, 400, "bad_bucket_id") => error::not_found::<StorageError>(path.to_owned(), None),
-        (_, 400, "file_not_present") => error::not_found::<StorageError>(path.to_owned(), None),
-        (_, 400, "out_of_range") => error::internal_error::<StorageError>(&error.message, None),
-        (_, 401, "unauthorized") => error::access_denied::<StorageError>(
-            "The application key id or key were not recognized.",
-            None,
-        ),
-        (_, 401, "bad_auth_token") => {
-            error::access_expired::<StorageError>("The authentication token is invalid.", None)
+    match (error_info.status, error_info.code.as_str()) {
+        (400, "bad_request") => error(error::internal_error(Some(&error_info.message))),
+        (400, "bad_bucket_id") => {
+            error(error::not_found(path.to_owned(), Some(&error_info.message)))
         }
-        (_, 401, "expired_auth_token") => {
-            error::access_expired::<StorageError>("The authentication token has expired.", None)
+        (400, "invalid_bucket_id") => {
+            error(error::not_found(path.to_owned(), Some(&error_info.message)))
         }
-        (_, 401, "unsupported") => error::internal_error::<StorageError>(&error.message, None),
-        (_, 404, "not_found") => error::not_found::<StorageError>(path.clone(), None),
-        (_, 503, "bad_request") => error::connection_failed::<StorageError>(&error.message, None),
-        _ => error::other_error::<StorageError>(
-            &format!(
-                "Unknown B2 API failure {}: {}, {}",
-                error.status, error.code, error.message
-            ),
-            None,
-        ),
+        (400, "too_many_buckets") => error(error::over_quota(Some(&error_info.code))),
+        (400, "duplicate_bucket_name") => error(error::already_exists(
+            path.to_owned(),
+            Some(&error_info.code),
+        )),
+        (400, "file_not_present") => {
+            error(error::not_found(path.to_owned(), Some(&error_info.message)))
+        }
+        (400, "out_of_range") => error(error::internal_error(Some(&error_info.message))),
+
+        (401, "unsupported") => error(error::access_denied(Some(&error_info.message))),
+        (401, "unauthorized") => error(error::access_denied(Some(&error_info.message))),
+        (401, "bad_auth_token") => B2Error {
+            error: error::access_expired(Some(&error_info.message)),
+            needs_auth: true,
+            can_retry: true,
+        },
+        (401, "expired_auth_token") => B2Error {
+            error: error::access_expired(Some(&error_info.message)),
+            needs_auth: true,
+            can_retry: true,
+        },
+
+        (403, "cap_exceeded") => error(error::over_quota(Some(&error_info.code))),
+
+        (404, "not_found") => error(error::not_found(path.clone(), Some(&error_info.message))),
+
+        (405, "method_not_allowed") => error(error::internal_error(Some(&error_info.message))),
+
+        (408, "request_timeout") => B2Error {
+            error: error::connection_closed(Some(&error_info.message)),
+            needs_auth: true,
+            can_retry: true,
+        },
+
+        (416, "range_not_satisfiable") => error(error::internal_error(Some(&error_info.message))),
+
+        (429, "too_many_requests") => B2Error {
+            error: error::over_quota(Some(&error_info.message)),
+            needs_auth: true,
+            can_retry: true,
+        },
+
+        (500, "internal_error") => B2Error {
+            error: error::service_error(Some(&error_info.message)),
+            needs_auth: false,
+            can_retry: true,
+        },
+        (503, "bad_request") => B2Error {
+            error: error::service_error(Some(&error_info.message)),
+            needs_auth: true,
+            can_retry: true,
+        },
+
+        (status, _) => {
+            if status == 400 {
+                error(error::internal_error(Some(&error_info.message)))
+            } else if status == 401 {
+                B2Error {
+                    error: error::access_expired(Some(&error_info.message)),
+                    needs_auth: true,
+                    can_retry: true,
+                }
+            } else if status >= 500 && status < 600 {
+                B2Error {
+                    error: error::service_error(Some(&error_info.message)),
+                    needs_auth: true,
+                    can_retry: true,
+                }
+            } else {
+                B2Error {
+                    error: error::other_error(Some(&error_info.message)),
+                    needs_auth: true,
+                    can_retry: true,
+                }
+            }
+        }
     }
 }
 
@@ -151,7 +277,7 @@ impl B2Client {
         path: ObjectPath,
         client: &Client,
         request: Request<Body>,
-    ) -> StorageResult<Response<Body>> {
+    ) -> B2Result<Response<Body>> {
         let id = self.id;
 
         trace!("Client {:04}: Requesting {}", id, request.uri());
@@ -185,7 +311,7 @@ impl B2Client {
         path: ObjectPath,
         mut client: Client,
         request: Request<Body>,
-    ) -> StorageResult<R>
+    ) -> B2Result<R>
     where
         R: DeserializeOwned + fmt::Debug,
     {
@@ -209,10 +335,14 @@ impl B2Client {
             }
             Err(e) => {
                 error!("Client {:04}: {} api method failed: {}", id, method, e);
-                Err(error::invalid_data(
-                    &format!("Unable to parse response from {}.", method),
-                    Some(e),
-                ))
+                Err(B2Error {
+                    error: error::invalid_data(Some(&format!(
+                        "Unable to parse response from {}: {}.",
+                        method, e
+                    ))),
+                    needs_auth: false,
+                    can_retry: true,
+                })
             }
         }
     }
@@ -241,8 +371,9 @@ impl B2Client {
 
         let client = self.state.clients.acquire().await;
         let empty = ObjectPath::empty();
-        self.basic_request("b2_authorize_account", empty, client, request)
-            .await
+        Ok(self
+            .basic_request("b2_authorize_account", empty, client, request)
+            .await?)
     }
 
     async fn b2_api_call<S, Q>(self, method: &str, path: ObjectPath, request: S) -> StorageResult<Q>
@@ -282,15 +413,15 @@ impl B2Client {
             {
                 Ok(response) => return Ok(response),
                 Err(e) => {
-                    if e.kind() == error::StorageErrorKind::AccessExpired {
+                    if e.needs_auth {
                         self.reset_session(&authorization).await;
-
-                        tries += 1;
-                        if tries < MAX_API_RETRIES {
-                            continue;
-                        }
                     }
-                    return Err(e);
+
+                    tries += 1;
+
+                    if !e.can_retry || tries >= MAX_API_RETRIES {
+                        return Err(e.into());
+                    }
                 }
             }
         }
@@ -317,7 +448,7 @@ impl B2Client {
     }
 
     pub async fn account_info(&self) -> StorageResult<AuthorizeAccountResponse> {
-        self.session().await
+        Ok(self.session().await?)
     }
 
     pub async fn b2_download_file_by_name(
@@ -369,15 +500,15 @@ impl B2Client {
                 }
                 Err(e) => {
                     client.release();
-                    if e.kind() == error::StorageErrorKind::AccessExpired {
+                    if e.needs_auth {
                         self.reset_session(&authorization).await;
-
-                        tries += 1;
-                        if tries < MAX_API_RETRIES {
-                            continue;
-                        }
                     }
-                    return Err(e);
+
+                    tries += 1;
+
+                    if !e.can_retry || tries >= MAX_API_RETRIES {
+                        return Err(e.into());
+                    }
                 }
             }
         }
@@ -427,11 +558,10 @@ impl B2Client {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     tries += 1;
-                    if tries < MAX_API_RETRIES {
-                        continue;
-                    }
 
-                    return Err(e);
+                    if !e.can_retry || tries >= MAX_API_RETRIES {
+                        return Err(e.into());
+                    }
                 }
             }
         }
@@ -470,11 +600,10 @@ impl B2Client {
                 Ok(response) => return Ok(response),
                 Err(e) => {
                     tries += 1;
-                    if tries < MAX_API_RETRIES {
-                        continue;
-                    }
 
-                    return Err(e);
+                    if !e.can_retry || tries >= MAX_API_RETRIES {
+                        return Err(e.into());
+                    }
                 }
             }
         }
