@@ -151,6 +151,18 @@ where
     }
 }
 
+impl<F, S> Drop for AfterStream<F, S>
+where
+    S: Unpin + Stream + 'static,
+    F: Unpin + FnOnce() -> (),
+{
+    fn drop(&mut self) {
+        if let Some(callback) = self.callback.take() {
+            callback();
+        }
+    }
+}
+
 impl<F, S> Stream for AfterStream<F, S>
 where
     S: Unpin + Stream + 'static,
