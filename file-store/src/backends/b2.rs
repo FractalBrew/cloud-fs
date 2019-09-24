@@ -48,8 +48,6 @@ use std::convert::{Infallible, TryInto};
 use std::future::Future;
 use std::pin::Pin;
 use std::slice::Iter;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -72,9 +70,9 @@ use storage_types::b2::v2::{FileAction, UserFileInfo, LAST_MODIFIED_KEY};
 use super::Backend;
 use crate::types::stream::{MergedStreams, ResultStreamPoll};
 use crate::types::*;
-use crate::utils::{into_data_stream, Acquired, CloningPool};
+use crate::utils::{into_data_stream, Acquired, CloningPool, Pool};
 use crate::{FileStore, StorageBackend};
-use client::{B2Client, B2ClientState};
+use client::{B2APIState, B2Client, B2API};
 
 const TOTAL_MAX_SMALL_FILE_SIZE: u64 = 5 * 1000 * 1000 * 1000;
 const DEFAULT_MAX_SMALL_FILE_SIZE: u64 = 200 * 1000 * 1000;
@@ -196,7 +194,7 @@ struct PartData {
 }
 
 async fn part_upload(
-    client: B2Client,
+    client: B2API,
     path: ObjectPath,
     file_id: String,
     part: usize,
@@ -238,7 +236,7 @@ async fn part_upload(
 }
 
 async fn large_upload<S>(
-    client: B2Client,
+    client: B2API,
     recommended_part_size: u64,
     info: UploadInfo,
     bucket_id: String,
@@ -398,7 +396,7 @@ where
 }
 
 async fn small_upload(
-    client: B2Client,
+    client: B2API,
     info: UploadInfo,
     bucket_id: String,
     file_name: String,
@@ -443,7 +441,7 @@ async fn small_upload(
 }
 
 async fn perform_upload<S>(
-    client: B2Client,
+    client: B2API,
     mut max_small_file_size: u64,
     info: UploadInfo,
     bucket_id: String,
@@ -522,14 +520,14 @@ where
 }
 
 /*struct FileNamesRequestor {
-    client: B2Client,
+    client: B2API,
     path: ObjectPath,
     options: Option<ListFileNamesRequest>,
 }
 
 impl FileNamesRequestor {
     fn new(
-        client: B2Client,
+        client: B2API,
         path: ObjectPath,
         options: ListFileNamesRequest,
     ) -> FileNamesRequestor {
@@ -562,14 +560,14 @@ impl ListRequestor<ListFileNamesResponse> for FileNamesRequestor {
 }*/
 
 struct FileVersionsRequestor {
-    client: B2Client,
+    client: B2API,
     path: ObjectPath,
     options: Option<ListFileVersionsRequest>,
 }
 
 impl FileVersionsRequestor {
     fn new(
-        client: B2Client,
+        client: B2API,
         path: ObjectPath,
         options: ListFileVersionsRequest,
     ) -> FileVersionsRequestor {
@@ -690,7 +688,7 @@ where
 /// The backend implementation for B2 storage.
 #[derive(Debug, Clone)]
 pub struct B2Backend {
-    state: Arc<B2ClientState>,
+    state: B2APIState,
 }
 
 impl B2Backend {
@@ -723,17 +721,14 @@ impl B2Backend {
         }
     }
 
-    /// Creates a new [`B2Client`](struct.B2Client.html) that can be used for
+    /// Creates a new [`B2API`](struct.B2API.html) that can be used for
     /// making B2 API calls.
-    fn client(&self) -> B2Client {
-        B2Client {
-            id: self.state.next_id.fetch_add(1, Ordering::SeqCst),
-            state: self.state.clone(),
-        }
+    fn client(&self) -> B2API {
+        B2API::new(&self.state)
     }
 
     async fn expand_path(
-        client: B2Client,
+        client: B2API,
         prefix: ObjectPath,
         path: ObjectPath,
     ) -> StorageResult<(Bucket, String)> {
@@ -843,14 +838,25 @@ impl B2BackendBuilder {
             };
 
             let client = HyperClient::builder().build(connector);
+            let clients = ClientPool::new(client, Some(self.max_requests));
+
+            let auth_tokens = Pool::new(
+                (self.settings.clone(), clients.clone()),
+                Some(self.max_requests / 2),
+                |(settings, clients)| {
+                    WrappedFuture::<StorageResult<AuthorizeAccountResponse>>::from_future(
+                        B2Client::authorize(settings.clone(), clients.clone()),
+                    )
+                },
+            );
 
             let backend = B2Backend {
-                state: Arc::new(B2ClientState {
+                state: B2APIState {
                     settings: self.settings,
                     next_id: Default::default(),
-                    clients: ClientPool::new(client, Some(self.max_requests)),
-                    session: Default::default(),
-                }),
+                    clients,
+                    auth_tokens,
+                },
             };
 
             // Make sure we can connect.
@@ -863,7 +869,7 @@ impl B2BackendBuilder {
 }
 
 async fn object_list(
-    client: B2Client,
+    client: B2API,
     backend_prefix: ObjectPath,
     prefix: ObjectPath,
     delimiter: Option<String>,
@@ -965,7 +971,7 @@ impl StorageBackend for B2Backend {
         P::Error: Into<StorageError>,
     {
         async fn get(
-            client: B2Client,
+            client: B2API,
             backend_prefix: ObjectPath,
             path: ObjectPath,
         ) -> StorageResult<Object> {
@@ -1109,7 +1115,7 @@ impl StorageBackend for B2Backend {
         P::Error: Into<StorageError>,
     {
         async fn upload<S>(
-            client: B2Client,
+            client: B2API,
             max_small_file_size: u64,
             prefix: ObjectPath,
             info: UploadInfo,

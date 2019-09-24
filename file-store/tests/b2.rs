@@ -31,12 +31,12 @@ mod test1 {
     use crate::runner::{TestContext, TestError, TestResult};
 
     async fn build_fs(context: &TestContext) -> TestResult<(FileStore, Sender<()>)> {
-        let (addr, sender) = start_server(context.get_fs_root(), 60)?;
+        let (addr, sender) = start_server(context.get_fs_root(), 20000)?;
 
         let fs = B2Backend::builder("foo", "bar")
             .host(&format!("http://{}", addr))
             .limit_small_file_size(20 * 1024 * 1024)
-            .limit_requests(2)
+            .limit_requests(5)
             .connect()
             .await?;
         Ok((fs, sender))
@@ -62,12 +62,12 @@ mod retries {
     use crate::runner::{TestContext, TestError, TestResult};
 
     async fn build_fs(context: &TestContext) -> TestResult<(FileStore, Sender<()>)> {
-        let (addr, sender) = start_server(context.get_fs_root(), 20)?;
+        let (addr, sender) = start_server(context.get_fs_root(), 3)?;
 
         let fs = B2Backend::builder("foo", "bar")
             .host(&format!("http://{}", addr))
             .limit_small_file_size(20 * 1024 * 1024)
-            .limit_requests(200)
+            .limit_requests(2)
             .connect()
             .await?;
         Ok((fs, sender))

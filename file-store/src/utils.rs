@@ -193,7 +193,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Pool<C, T, E>
 where
     C: fmt::Debug,
@@ -201,6 +201,19 @@ where
     E: Send + 'static,
 {
     state: Arc<Mutex<PoolState<C, T, E>>>,
+}
+
+impl<C, T, E> Clone for Pool<C, T, E>
+where
+    C: fmt::Debug,
+    T: fmt::Debug + Send + 'static,
+    E: Send + 'static,
+{
+    fn clone(&self) -> Pool<C, T, E> {
+        Pool {
+            state: self.state.clone(),
+        }
+    }
 }
 
 impl<C, T, E> Pool<C, T, E>
@@ -322,12 +335,12 @@ where
     T: fmt::Debug + Send + 'static,
     E: Send + 'static,
 {
-    // pub fn destroy(&mut self) {
-    //     if self.inner.take().is_some() {
-    //         let mut state = self.state.lock().unwrap();
-    //         state.release(None);
-    //     }
-    // }
+    pub fn destroy(&mut self) {
+        if self.inner.take().is_some() {
+            let mut state = self.state.lock().unwrap();
+            state.release(None);
+        }
+    }
 
     pub fn release(&mut self) {
         if let Some(t) = self.inner.take() {
