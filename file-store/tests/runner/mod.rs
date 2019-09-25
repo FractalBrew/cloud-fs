@@ -266,6 +266,14 @@ macro_rules! build_tests {
             $setup,
             $cleanup
         );
+        make_test!(
+            $root,
+            $backend,
+            read,
+            test_simultaneous_download,
+            $setup,
+            $cleanup
+        );
         make_test!($root, $backend, write, test_copy_file, $setup, $cleanup);
         make_test!($root, $backend, write, test_move_file, $setup, $cleanup);
         make_test!($root, $backend, write, test_delete_object, $setup, $cleanup);

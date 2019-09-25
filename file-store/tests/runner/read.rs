@@ -13,10 +13,13 @@
 // limitations under the License.
 
 use std::fs::symlink_metadata;
+use std::future::Future;
 use std::iter::empty;
 use std::path::Path;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::{FuturesUnordered, StreamExt, TryStreamExt};
 
 use super::utils::*;
 use super::*;
@@ -409,6 +412,93 @@ pub async fn test_get_file_stream(fs: &FileStore, context: &TestContext) -> Test
     test_fail(fs, context, "test1/dir1/daz").await?;
     test_fail(fs, context, "test1/dir1/foo/bar").await?;
     test_fail(fs, context, "test1/dir1/dir2/gaz").await?;
+
+    Ok(())
+}
+
+struct Wrapper {
+    inner: Pin<Box<dyn Future<Output = TestResult<()>> + Send + 'static>>,
+}
+
+impl Wrapper {
+    pub fn new<F>(future: F) -> Wrapper
+    where
+        F: Future<Output = TestResult<()>> + Send + 'static,
+    {
+        Wrapper {
+            inner: Box::pin(future),
+        }
+    }
+}
+
+impl Future for Wrapper {
+    type Output = TestResult<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<TestResult<()>> {
+        self.inner.as_mut().poll(cx)
+    }
+}
+
+pub async fn test_simultaneous_download(fs: &FileStore, context: &TestContext) -> TestResult<()> {
+    async fn get_checker<I>(fs: FileStore, path: ObjectPath, mut data: I) -> TestResult<()>
+    where
+        I: Iterator<Item = u8> + Send + 'static,
+    {
+        let mut stream = fs.get_file_stream(path).await?;
+        let mut pos = 0;
+        loop {
+            let buf = stream.next().await;
+            match buf {
+                Some(Ok(buffer)) => {
+                    for x in 0..buffer.len() {
+                        match data.next() {
+                            Some(b) => test_assert_eq!(
+                                buffer[x],
+                                b,
+                                "Data should have matched at position {}.",
+                                pos
+                            ),
+                            None => test_fail!("Ran out of expected data as position {}.", pos),
+                        }
+                        pos += 1;
+                    }
+                }
+                Some(Err(e)) => {
+                    return Err(e.into());
+                }
+                None => {
+                    test_assert_eq!(
+                        data.next(),
+                        None,
+                        "Expected data should have ended at position {}.",
+                        pos
+                    );
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    let mut results = FuturesUnordered::<Wrapper>::new();
+
+    results.push(Wrapper::new(get_checker(
+        fs.clone(),
+        context.get_path("test1/dir1/smallfile.txt"),
+        b"This is quite a short file.".iter().cloned(),
+    )));
+    results.push(Wrapper::new(get_checker(
+        fs.clone(),
+        context.get_path("test1/dir1/largefile"),
+        ContentIterator::new(0, 100 * MB),
+    )));
+
+    while let Some(result) = results.next().await {
+        if let Err(e) = result {
+            return Err(e);
+        }
+    }
 
     Ok(())
 }
